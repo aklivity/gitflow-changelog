@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 async function writePom(dir: string, version: string): Promise<void> {
   await writeFile(
     join(dir, 'pom.xml'),
-    `<project><properties><zilla.version>${version}</zilla.version></properties></project>`,
+    `<project><properties><engine.version>${version}</engine.version></properties></project>`,
     'utf8',
   );
   await execFileAsync('git', ['add', 'pom.xml'], { cwd: dir });
@@ -71,8 +71,8 @@ describe('run — upstream fold-in wiring', () => {
     const upstreamFeature = entry({ number: 2080, title: 'export telemetry events', sha: upstreamShaAt126 });
 
     vi.spyOn(GithubDriver.prototype, 'fetchEntries').mockImplementation(async (options) => {
-      if (options.repo === 'zilla-plus') return [ownEntry];
-      if (options.repo === 'zilla') return [upstreamBugfix, upstreamFeature];
+      if (options.repo === 'app') return [ownEntry];
+      if (options.repo === 'engine') return [upstreamBugfix, upstreamFeature];
       return [];
     });
     vi.spyOn(gitModule, 'cloneRepo').mockImplementation(async (_owner, _repo, dir) => {
@@ -80,8 +80,8 @@ describe('run — upstream fold-in wiring', () => {
     });
 
     const result = await run({
-      owner: 'aklivity',
-      repo: 'zilla-plus',
+      owner: 'acme',
+      repo: 'app',
       token: 't',
       ref: 'develop',
       gitDir: consumer.dir,
@@ -93,9 +93,9 @@ describe('run — upstream fold-in wiring', () => {
       format: 'default',
       upstream: [
         {
-          repo: 'aklivity/zilla',
+          repo: 'acme/engine',
           'dependency-version-file': 'pom.xml',
-          'dependency-version-property': 'zilla.version',
+          'dependency-version-property': 'engine.version',
           classification: 'none',
         },
       ],
@@ -103,15 +103,15 @@ describe('run — upstream fold-in wiring', () => {
 
     expect(result.markdown).toContain('## [v1.1.0]');
     expect(result.markdown).toContain('- Our own change [\\#500]');
-    expect(result.markdown).toContain('_Includes zilla 1.2.5–1.2.6._');
+    expect(result.markdown).toContain('_Includes engine 1.2.5–1.2.6._');
     expect(result.markdown).toContain(
-      '- export telemetry events [aklivity/zilla\\#2080](https://github.com/aklivity/zilla/pull/2080)',
+      '- export telemetry events [acme/engine\\#2080](https://github.com/acme/engine/pull/2080)',
     );
 
     expect(result.markdown).toContain('## [v1.0.0]');
-    expect(result.markdown).toContain('_Includes zilla up to 1.2.5._');
+    expect(result.markdown).toContain('_Includes engine up to 1.2.5._');
     expect(result.markdown).toContain(
-      '- fix crash [aklivity/zilla\\#1990](https://github.com/aklivity/zilla/pull/1990)',
+      '- fix crash [acme/engine\\#1990](https://github.com/acme/engine/pull/1990)',
     );
 
     const v110Index = result.markdown.indexOf('## [v1.1.0]');

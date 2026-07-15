@@ -69,7 +69,7 @@ describe('readVersionAtRef and computeVersionRanges', () => {
     const { join } = await import('node:path');
     await writeFile(
       join(fixture.dir, 'pom.xml'),
-      `<project><properties><zilla.version>${version}</zilla.version></properties></project>`,
+      `<project><properties><engine.version>${version}</engine.version></properties></project>`,
       'utf8',
     );
     const { execFile } = await import('node:child_process');
@@ -82,14 +82,14 @@ describe('readVersionAtRef and computeVersionRanges', () => {
     await fixture.commit('bump to 1.2.5');
     await fixture.tag('v1.0.0', '2024-01-01T00:00:00Z');
 
-    expect(await readVersionAtRef('v1.0.0', 'pom.xml', 'zilla.version', { cwd: fixture.dir })).toBe('1.2.5');
+    expect(await readVersionAtRef('v1.0.0', 'pom.xml', 'engine.version', { cwd: fixture.dir })).toBe('1.2.5');
   });
 
   it('returns undefined when the file did not exist yet at that ref', async () => {
     await fixture.commit('unrelated');
     await fixture.tag('v0.9.0', '2024-01-01T00:00:00Z');
 
-    expect(await readVersionAtRef('v0.9.0', 'pom.xml', 'zilla.version', { cwd: fixture.dir })).toBeUndefined();
+    expect(await readVersionAtRef('v0.9.0', 'pom.xml', 'engine.version', { cwd: fixture.dir })).toBeUndefined();
   });
 
   it('pairs every tag with the version at the tag immediately before it, using the full tag sequence', async () => {
@@ -111,7 +111,7 @@ describe('readVersionAtRef and computeVersionRanges', () => {
     ]);
     placement.allTags = [tag('v1.2.0'), tag('v1.1.0'), tag('v1.0.0')];
 
-    const ranges = await computeVersionRanges(placement, 'develop', 'pom.xml', 'zilla.version', { cwd: fixture.dir });
+    const ranges = await computeVersionRanges(placement, 'develop', 'pom.xml', 'engine.version', { cwd: fixture.dir });
 
     expect(ranges).toEqual([
       { bucketTag: 'v1.2.0', fromVersion: '1.2.5', toVersion: '1.2.6' },
@@ -128,7 +128,7 @@ describe('readVersionAtRef and computeVersionRanges', () => {
     const placement = placementWithBuckets([{ tag: tag('v1.0.0'), entries: [pr(1)] }]);
     placement.allTags = [tag('v1.0.0')];
 
-    const ranges = await computeVersionRanges(placement, 'develop', 'pom.xml', 'zilla.version', { cwd: fixture.dir });
+    const ranges = await computeVersionRanges(placement, 'develop', 'pom.xml', 'engine.version', { cwd: fixture.dir });
 
     expect(ranges).toEqual([{ bucketTag: 'v1.0.0', fromVersion: undefined, toVersion: '1.2.5' }]);
   });
@@ -142,8 +142,8 @@ describe('filterForFoldIn', () => {
   it('returns only PR-kind entries unfiltered when classification level is none', async () => {
     const entries = await filterForFoldIn([pr(1), issue(2)], {
       level: 'none',
-      owner: 'aklivity',
-      repo: 'zilla',
+      owner: 'acme',
+      repo: 'engine',
       token: 't',
     });
     expect(entries.map((e) => e.number)).toEqual([1]);
@@ -151,15 +151,15 @@ describe('filterForFoldIn', () => {
 
   it('drops PRs classified as noise or test-only when level is path', async () => {
     vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
-      if (number === 1) return ['runtime/binding-kafka/src/main/java/Foo.java'];
+      if (number === 1) return ['runtime/module-a/src/main/java/Foo.java'];
       if (number === 2) return ['.github/workflows/build.yml'];
-      return ['runtime/binding-kafka/src/test/java/FooTest.java'];
+      return ['runtime/module-a/src/test/java/FooTest.java'];
     });
 
     const entries = await filterForFoldIn([pr(1), pr(2), pr(3)], {
       level: 'path',
-      owner: 'aklivity',
-      repo: 'zilla',
+      owner: 'acme',
+      repo: 'engine',
       token: 't',
     });
 
@@ -168,19 +168,19 @@ describe('filterForFoldIn', () => {
 
   it('additionally requires a touched artifact in the dependency set when level is maven', async () => {
     vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
-      if (number === 1) return ['runtime/binding-kafka/src/main/java/Foo.java'];
-      return ['runtime/binding-http/src/main/java/Bar.java'];
+      if (number === 1) return ['runtime/module-a/src/main/java/Foo.java'];
+      return ['runtime/module-b/src/main/java/Bar.java'];
     });
 
     const entries = await filterForFoldIn([pr(1), pr(2)], {
       level: 'maven',
-      owner: 'aklivity',
-      repo: 'zilla',
+      owner: 'acme',
+      repo: 'engine',
       token: 't',
-      dependencySet: new Set(['binding-kafka']),
+      dependencySet: new Set(['module-a']),
       moduleArtifactIds: new Map([
-        ['binding-kafka', 'binding-kafka'],
-        ['binding-http', 'binding-http'],
+        ['module-a', 'module-a'],
+        ['module-b', 'module-b'],
       ]),
     });
 
@@ -210,7 +210,7 @@ describe('computeFoldIn', () => {
     async function writePom(version: string) {
       await writeFile(
         join(fixture.dir, 'pom.xml'),
-        `<project><properties><zilla.version>${version}</zilla.version></properties></project>`,
+        `<project><properties><engine.version>${version}</engine.version></properties></project>`,
         'utf8',
       );
       await git('git', ['add', 'pom.xml'], { cwd: fixture.dir });
@@ -233,15 +233,15 @@ describe('computeFoldIn', () => {
     ]);
 
     vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
-      if (number === 2080) return ['runtime/binding-kafka/src/main/java/Foo.java'];
+      if (number === 2080) return ['runtime/module-a/src/main/java/Foo.java'];
       return ['.github/workflows/build.yml'];
     });
 
     const sections = await computeFoldIn({
       upstream: {
-        repo: 'aklivity/zilla',
+        repo: 'acme/engine',
         'dependency-version-file': 'pom.xml',
-        'dependency-version-property': 'zilla.version',
+        'dependency-version-property': 'engine.version',
         classification: 'path',
       },
       placement,

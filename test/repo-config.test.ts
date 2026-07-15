@@ -30,9 +30,9 @@ describe('loadRepoConfig classification/upstream', () => {
       [
         'classification: none',
         'upstream:',
-        '  - repo: aklivity/zilla',
+        '  - repo: acme/engine',
         '    dependency-version-file: pom.xml',
-        '    dependency-version-property: zilla.version',
+        '    dependency-version-property: engine.version',
         '    classification: maven',
       ].join('\n'),
       'utf8',
@@ -43,9 +43,9 @@ describe('loadRepoConfig classification/upstream', () => {
     expect(config.classification).toBe('none');
     expect(config.upstream).toEqual([
       {
-        repo: 'aklivity/zilla',
+        repo: 'acme/engine',
         'dependency-version-file': 'pom.xml',
-        'dependency-version-property': 'zilla.version',
+        'dependency-version-property': 'engine.version',
         classification: 'maven',
       },
     ]);
@@ -60,7 +60,7 @@ describe('loadRepoConfig classification/upstream', () => {
   it('rejects an upstream entry missing a required field', async () => {
     await writeFile(
       join(dir, '.gitflow-changelog.yml'),
-      ['upstream:', '  - repo: aklivity/zilla', '    classification: path'].join('\n'),
+      ['upstream:', '  - repo: acme/engine', '    classification: path'].join('\n'),
       'utf8',
     );
 

@@ -4,8 +4,8 @@ import { applyEvent, entriesFromCache } from '../src/drivers/github.js';
 import type { DriverOptions } from '../src/types.js';
 
 const OPTIONS: DriverOptions = {
-  owner: 'aklivity',
-  repo: 'zilla',
+  owner: 'acme',
+  repo: 'widget',
   token: 'token',
   enhancementLabels: ['enhancement'],
   bugLabels: ['bug'],
