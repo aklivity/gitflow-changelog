@@ -79,7 +79,7 @@ describe('render', () => {
     expect(markdown.slice(v100Index, v100Index + 200)).not.toContain('Full Changelog');
   });
 
-  it('renders a fold-in section as a distinct sub-section, never blended into native entries', () => {
+  it('inlines fold-in entries into the matching category section, tagged with owner/repo#N', () => {
     const placement: PlacementResult = {
       dropped: [],
       unresolved: [],
@@ -107,13 +107,17 @@ describe('render', () => {
 
     const markdown = render(placement, OPTIONS, foldIns);
 
+    expect(markdown).toContain('_Includes zilla 1.2.5–1.2.6._');
     expect(markdown).toContain('**Merged pull requests:**');
     expect(markdown).toContain('- Our own PR [\\#6](https://github.com/aklivity/zilla/pull/6)');
-    expect(markdown).toContain('**Included from zilla (1.2.5–1.2.6):**');
-    expect(markdown).toContain('- export telemetry events [\\#2080](https://github.com/aklivity/zilla/pull/2080)');
+    expect(markdown).toContain(
+      '- export telemetry events [aklivity/zilla\\#2080](https://github.com/aklivity/zilla/pull/2080)',
+    );
 
+    const sectionIndex = markdown.indexOf('**Merged pull requests:**');
     const ownIndex = markdown.indexOf('Our own PR');
-    const foldInIndex = markdown.indexOf('Included from zilla');
+    const foldInIndex = markdown.indexOf('export telemetry events');
+    expect(sectionIndex).toBeLessThan(ownIndex);
     expect(ownIndex).toBeLessThan(foldInIndex);
   });
 
@@ -133,6 +137,6 @@ describe('render', () => {
 
     const markdown = render(placement, OPTIONS, foldIns);
 
-    expect(markdown).toContain('**Included from zilla (up to 1.0.0):**');
+    expect(markdown).toContain('_Includes zilla up to 1.0.0._');
   });
 });

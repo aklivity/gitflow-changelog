@@ -16,6 +16,14 @@ export const Entry = z.object({
   login: z.string(),
   bot: z.boolean(),
   sha: z.string(),
+  // Set only on entries folded in from an upstream dependency (e.g.
+  // "aklivity/zilla") — undefined for entries native to the repo the
+  // changelog is being generated for. The renderer uses this to link to
+  // the right repo and to tag the visible number (owner/repo#N instead of
+  // bare #N), rather than segregating fold-in entries into their own
+  // section — a folded-in bug fix should still show up under "Fixed
+  // bugs" next to this repo's own bug fixes.
+  sourceRepo: z.string().optional(),
 });
 export type Entry = z.infer<typeof Entry>;
 

@@ -34,33 +34,26 @@ function authorLink(entry: Entry): string {
 
 function entryUrl(entry: Entry, options: RenderOptions): string {
   const path = entry.kind === 'pr' ? 'pull' : 'issues';
-  return `https://github.com/${options.owner}/${options.repo}/${path}/${entry.number}`;
+  const repo = entry.sourceRepo ?? `${options.owner}/${options.repo}`;
+  return `https://github.com/${repo}/${path}/${entry.number}`;
+}
+
+// A folded-in entry is tagged owner/repo#N (matching GitHub's own
+// cross-repo reference convention) rather than a bare #N — this repo's own
+// issue numbers are unrelated in scale, so an unmarked #2080 next to #941
+// would read as a typo rather than a deliberate cross-repo link.
+function entryLabel(entry: Entry): string {
+  return entry.sourceRepo ? `${entry.sourceRepo}\\#${entry.number}` : `\\#${entry.number}`;
 }
 
 function renderEntry(entry: Entry, options: RenderOptions): string {
   const title = escapeTitle(entry.title);
   const url = entryUrl(entry, options);
-  return `- ${title} [\\#${entry.number}](${url})${authorLink(entry)}`;
+  return `- ${title} [${entryLabel(entry)}](${url})${authorLink(entry)}`;
 }
 
-function foldInOptions(repo: string): RenderOptions {
-  const [owner, name] = repo.split('/');
-  return { owner, repo: name };
-}
-
-// Fold-in entries render as a clearly attributed, distinct sub-section —
-// never blended into this repo's own native entries — so a reader can tell
-// inherited changes from this repo's own work at a glance.
-function renderFoldIn(section: FoldInSection): string {
-  const range = section.fromVersion ? `${section.fromVersion}–${section.toVersion}` : `up to ${section.toVersion}`;
-  const options = foldInOptions(section.repo);
-  const lines = [`**Included from ${options.repo} (${range}):**`, ''];
-  for (const entry of section.entries)
-  {
-    lines.push(renderEntry(entry, options));
-  }
-  lines.push('');
-  return lines.join('\n');
+function withSourceRepo(entry: Entry, repo: string): Entry {
+  return { ...entry, sourceRepo: repo };
 }
 
 interface Section {
@@ -85,6 +78,15 @@ function sectionsFor(entries: Entry[]): Section[] {
 
 function tagDate(isoDate: string): string {
   return isoDate.slice(0, 10);
+}
+
+// A one-line note per upstream source, placed once per bucket rather than
+// repeated per entry — the entries themselves carry the owner/repo#N tag,
+// this just states the absorbed version range for context.
+function foldInNote(foldIn: FoldInSection): string {
+  const [, repoName] = foldIn.repo.split('/');
+  const range = foldIn.fromVersion ? `${foldIn.fromVersion}–${foldIn.toVersion}` : `up to ${foldIn.toVersion}`;
+  return `_Includes ${repoName} ${range}._`;
 }
 
 function renderBucket(
@@ -113,7 +115,15 @@ function renderBucket(
     }
   }
 
-  for (const section of sectionsFor(bucket.entries))
+  for (const foldIn of foldIns)
+  {
+    lines.push(foldInNote(foldIn), '');
+  }
+
+  const foldInEntries = foldIns.flatMap((foldIn) => foldIn.entries.map((entry) => withSourceRepo(entry, foldIn.repo)));
+  const allEntries = [...bucket.entries, ...foldInEntries];
+
+  for (const section of sectionsFor(allEntries))
   {
     lines.push(`**${section.heading}:**`, '');
     for (const entry of section.entries)
@@ -121,11 +131,6 @@ function renderBucket(
       lines.push(renderEntry(entry, options));
     }
     lines.push('');
-  }
-
-  for (const foldIn of foldIns)
-  {
-    lines.push(renderFoldIn(foldIn));
   }
 
   return lines.join('\n');
