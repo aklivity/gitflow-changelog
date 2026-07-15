@@ -136,3 +136,12 @@ npm run build   # bundles src/cli.ts -> dist/cli.js and src/action.ts -> dist/in
 Actions does not install dependencies for JavaScript actions at run time, so
 the bundle must be up to date in every commit. CI fails if `npm run build`
 produces a diff.
+
+## Releasing
+
+Releases are cut via the [Release workflow](./.github/workflows/release.yml)
+(`workflow_dispatch`, with a `version` input like `0.1.0`). It bumps
+`package.json`, rebuilds `dist/`, commits, and pushes two tags: the exact
+`vX.Y.Z` and a moving major-version tag (`v0` until a stable `v1`) that
+consumers reference via `uses: aklivity/gitflow-changelog@v0`, matching the
+convention used by `actions/checkout`, `actions/setup-node`, etc.
