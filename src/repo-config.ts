@@ -1,0 +1,36 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parse } from 'yaml';
+import { z } from 'zod';
+
+const RepoConfigSchema = z.object({
+  'tag-pattern': z.string().optional(),
+  'enhancement-labels': z.array(z.string()).optional(),
+  'bug-labels': z.array(z.string()).optional(),
+  'exclude-labels': z.array(z.string()).optional(),
+  format: z.string().optional(),
+});
+export type RepoConfig = z.infer<typeof RepoConfigSchema>;
+
+export const EMPTY_REPO_CONFIG: RepoConfig = {};
+
+// Policy settings (which tags get a section, how issues/PRs are categorized,
+// which renderer to use) live in a file committed to the consuming repo,
+// not as action inputs repeated at every call site. Unlike ref/token/cache
+// paths, these don't vary by call site — a repo has one changelog policy,
+// not one per prepare/finalize step or per branch — so a single file avoids
+// the same setting drifting out of sync across N copies of a release
+// workflow. Per-invocation settings still belong as action inputs.
+export async function loadRepoConfig(gitDir: string, configPath: string): Promise<RepoConfig> {
+  let raw: string;
+  try
+  {
+    raw = await readFile(join(gitDir, configPath), 'utf8');
+  }
+  catch
+  {
+    return EMPTY_REPO_CONFIG;
+  }
+
+  return RepoConfigSchema.parse(parse(raw) ?? {});
+}

@@ -1,0 +1,33 @@
+{
+  "name": "gitflow-changelog",
+  "version": "1.0.0",
+  "description": "Gitflow-aware changelog generator, packaged as a GitHub Action",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "gitflow-changelog": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "npm run build:cli && npm run build:action",
+    "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=dist/cli.js",
+    "build:action": "esbuild src/action.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.5.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

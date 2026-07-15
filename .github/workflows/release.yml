@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. 0.1.0 (no leading "v")
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Bump version and build
+        run: |
+          npm version "${{ inputs.version }}" --no-git-tag-version
+          npm run build
+
+      - name: Commit, tag, and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          MAJOR="v$(echo "$VERSION" | cut -d. -f1)"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # dist/ is gitignored on the branch itself — force-add it into this
+          # one release commit, which is reachable only via the tags below,
+          # never pushed onto the branch. develop/main stay dist-free forever.
+          git add package.json package-lock.json
+          git add -f dist
+          git commit -m "chore(release): v${VERSION}"
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git tag -f "$MAJOR" HEAD
+
+          git push origin "v${VERSION}"
+          git push origin -f "$MAJOR"
+
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --generate-notes
