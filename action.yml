@@ -49,29 +49,46 @@ inputs:
       a replacement commit SHA, for entries whose recorded commit no longer
       exists (e.g. after a history rewrite on another branch).
     required: false
+  config-path:
+    description: >-
+      Path to a YAML file (in the consuming repo) holding changelog policy —
+      tag-pattern, enhancement-labels, bug-labels, exclude-labels, format.
+      Policy belongs in one file rather than repeated inputs at every call
+      site, since it doesn't vary by branch or by which step (prepare vs.
+      finalize) is running. The inputs below still exist as one-off
+      overrides and take precedence over the file when set.
+    required: false
+    default: .gitflow-changelog.yml
   tag-pattern:
     description: >-
       Regular expression selecting which tags get their own changelog
       section (e.g. to exclude alpha/beta/rc pre-releases). Does not affect
       ancestry placement, only which tags are rendered as sections.
+      Overrides tag-pattern in config-path; defaults to matching every tag
+      if set in neither place.
     required: false
-    default: .*
   enhancement-labels:
-    description: Comma-separated labels categorized as "Implemented enhancements".
+    description: >-
+      Comma-separated labels categorized as "Implemented enhancements".
+      Overrides enhancement-labels in config-path; defaults to "enhancement"
+      if set in neither place.
     required: false
-    default: enhancement
   bug-labels:
-    description: Comma-separated labels categorized as "Fixed bugs".
+    description: >-
+      Comma-separated labels categorized as "Fixed bugs". Overrides
+      bug-labels in config-path; defaults to "bug" if set in neither place.
     required: false
-    default: bug
   exclude-labels:
-    description: Comma-separated labels excluded from the changelog entirely.
+    description: >-
+      Comma-separated labels excluded from the changelog entirely.
+      Overrides exclude-labels in config-path; defaults to
+      "duplicate,invalid,wontfix" if set in neither place.
     required: false
-    default: duplicate,invalid,wontfix
   format:
-    description: Output renderer. Only "default" is available in v1.
+    description: >-
+      Output renderer. Only "default" is available in v1. Overrides format
+      in config-path; defaults to "default" if set in neither place.
     required: false
-    default: default
   output-path:
     description: Path to write the generated changelog to.
     required: false

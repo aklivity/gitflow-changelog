@@ -14,6 +14,7 @@ async function main(): Promise<void> {
       'git-dir': { type: 'string' },
       'cache-path': { type: 'string' },
       'overrides-path': { type: 'string' },
+      'config-path': { type: 'string' },
       'tag-pattern': { type: 'string' },
       'enhancement-labels': { type: 'string' },
       'bug-labels': { type: 'string' },
@@ -23,7 +24,7 @@ async function main(): Promise<void> {
     },
   });
 
-  const options = toRunOptions({
+  const options = await toRunOptions({
     owner: values.owner,
     repo: values.repo,
     token: values.token ?? process.env.GITHUB_TOKEN,
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
     gitDir: values['git-dir'],
     cachePath: values['cache-path'],
     overridesPath: values['overrides-path'],
+    configPath: values['config-path'],
     tagPattern: values['tag-pattern'],
     enhancementLabels: values['enhancement-labels'],
     bugLabels: values['bug-labels'],

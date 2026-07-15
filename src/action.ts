@@ -4,7 +4,7 @@ import { toRunOptions } from './config.js';
 import { run } from './run.js';
 
 async function main(): Promise<void> {
-  const options = toRunOptions({
+  const options = await toRunOptions({
     owner: core.getInput('owner', { required: true }),
     repo: core.getInput('repo', { required: true }),
     token: core.getInput('token', { required: true }),
@@ -12,6 +12,7 @@ async function main(): Promise<void> {
     gitDir: core.getInput('git-dir') || undefined,
     cachePath: core.getInput('cache-path') || undefined,
     overridesPath: core.getInput('overrides-path') || undefined,
+    configPath: core.getInput('config-path') || undefined,
     tagPattern: core.getInput('tag-pattern') || undefined,
     enhancementLabels: core.getInput('enhancement-labels') || undefined,
     bugLabels: core.getInput('bug-labels') || undefined,

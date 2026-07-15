@@ -67,6 +67,34 @@ npx gitflow-changelog --owner aklivity --repo zilla --token "$GITHUB_TOKEN" --re
 is not a wrapper around the Action, and vice versa; both are thin entrypoints
 over the same logic.
 
+## Changelog policy: `.gitflow-changelog.yml`
+
+Settings that describe *what your changelog looks like* — which tags get
+their own section, how issues/PRs are categorized, which renderer to use —
+live in a YAML file committed to the consuming repo (path via the
+`config-path` input, default `.gitflow-changelog.yml`), not as action inputs
+repeated at every call site:
+
+```yaml
+tag-pattern: '^[0-9]+\.[0-9]+\.[0-9]+$' # exclude alpha/beta/rc pre-releases
+enhancement-labels: [enhancement]
+bug-labels: [bug]
+exclude-labels: [duplicate, invalid, wontfix]
+format: default
+```
+
+This is a policy that doesn't vary by branch or by which step (`prepare` vs.
+`finalize`) is running, so one file avoids the same setting drifting out of
+sync across every copy of a release workflow. Settings that genuinely do
+vary per call site — `ref`, `token`, `git-dir`, `cache-path`,
+`overrides-path`, `output-path` — stay as action inputs.
+
+The matching action inputs (`tag-pattern`, `enhancement-labels`,
+`bug-labels`, `exclude-labels`, `format`) still exist as one-off overrides
+and take precedence over the file when set; if neither the input nor the
+file sets a value, each falls back to a built-in default (shown in the
+example above).
+
 ## Incremental caching
 
 Both a PR's `merge_commit_sha` and an issue's closing commit are immutable

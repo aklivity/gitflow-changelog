@@ -25982,7 +25982,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse2(src, reviver, options) {
+    function parse3(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -26023,7 +26023,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse2;
+    exports.parse = parse3;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument;
     exports.stringify = stringify;
@@ -26577,38 +26577,10 @@ function warning(message, properties = {}) {
   issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 
-// src/config.ts
-function splitLabels(value, fallback) {
-  if (!value) {
-    return fallback;
-  }
-  return value.split(",").map((label) => label.trim()).filter((label) => label.length > 0);
-}
-function toRunOptions(raw) {
-  if (!raw.owner || !raw.repo) {
-    throw new Error("owner and repo are required");
-  }
-  if (!raw.token) {
-    throw new Error("token is required");
-  }
-  return {
-    owner: raw.owner,
-    repo: raw.repo,
-    token: raw.token,
-    ref: raw.ref ?? "HEAD",
-    gitDir: raw.gitDir ?? process.cwd(),
-    cachePath: raw.cachePath ?? ".gitflow-changelog-cache.json",
-    overridesPath: raw.overridesPath,
-    tagPattern: new RegExp(raw.tagPattern ?? ".*"),
-    enhancementLabels: splitLabels(raw.enhancementLabels, ["enhancement"]),
-    bugLabels: splitLabels(raw.bugLabels, ["bug"]),
-    excludeLabels: splitLabels(raw.excludeLabels, ["duplicate", "invalid", "wontfix"]),
-    format: raw.format ?? "default"
-  };
-}
-
-// src/cache.ts
-import { readFile, writeFile as writeFile2 } from "node:fs/promises";
+// src/repo-config.ts
+var import_yaml = __toESM(require_dist(), 1);
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -30651,7 +30623,59 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// src/repo-config.ts
+var RepoConfigSchema = external_exports.object({
+  "tag-pattern": external_exports.string().optional(),
+  "enhancement-labels": external_exports.array(external_exports.string()).optional(),
+  "bug-labels": external_exports.array(external_exports.string()).optional(),
+  "exclude-labels": external_exports.array(external_exports.string()).optional(),
+  format: external_exports.string().optional()
+});
+var EMPTY_REPO_CONFIG = {};
+async function loadRepoConfig(gitDir, configPath) {
+  let raw;
+  try {
+    raw = await readFile(join(gitDir, configPath), "utf8");
+  } catch {
+    return EMPTY_REPO_CONFIG;
+  }
+  return RepoConfigSchema.parse((0, import_yaml.parse)(raw) ?? {});
+}
+
+// src/config.ts
+function splitLabels(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+  return value.split(",").map((label) => label.trim()).filter((label) => label.length > 0);
+}
+async function toRunOptions(raw) {
+  if (!raw.owner || !raw.repo) {
+    throw new Error("owner and repo are required");
+  }
+  if (!raw.token) {
+    throw new Error("token is required");
+  }
+  const gitDir = raw.gitDir ?? process.cwd();
+  const fileConfig = await loadRepoConfig(gitDir, raw.configPath ?? ".gitflow-changelog.yml");
+  return {
+    owner: raw.owner,
+    repo: raw.repo,
+    token: raw.token,
+    ref: raw.ref ?? "HEAD",
+    gitDir,
+    cachePath: raw.cachePath ?? ".gitflow-changelog-cache.json",
+    overridesPath: raw.overridesPath,
+    tagPattern: new RegExp(raw.tagPattern || fileConfig["tag-pattern"] || ".*"),
+    enhancementLabels: splitLabels(raw.enhancementLabels, fileConfig["enhancement-labels"] ?? ["enhancement"]),
+    bugLabels: splitLabels(raw.bugLabels, fileConfig["bug-labels"] ?? ["bug"]),
+    excludeLabels: splitLabels(raw.excludeLabels, fileConfig["exclude-labels"] ?? ["duplicate", "invalid", "wontfix"]),
+    format: raw.format || fileConfig.format || "default"
+  };
+}
+
 // src/cache.ts
+import { readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
 var CACHE_SCHEMA_VERSION = 1;
 var CacheEntrySchema = external_exports.object({
   kind: external_exports.enum(["issue", "pr"]),
@@ -30672,7 +30696,7 @@ function emptyCache() {
 async function loadCache(path) {
   let raw;
   try {
-    raw = await readFile(path, "utf8");
+    raw = await readFile2(path, "utf8");
   } catch {
     return emptyCache();
   }
@@ -30828,8 +30852,8 @@ var GithubDriver = class {
 };
 
 // src/overrides.ts
-var import_yaml = __toESM(require_dist(), 1);
-import { readFile as readFile2 } from "node:fs/promises";
+var import_yaml2 = __toESM(require_dist(), 1);
+import { readFile as readFile3 } from "node:fs/promises";
 var OverridesSchema = external_exports.object({
   "pr-overrides": external_exports.record(external_exports.string(), external_exports.string()).default({}),
   "issue-overrides": external_exports.record(external_exports.string(), external_exports.string()).default({})
@@ -30844,11 +30868,11 @@ async function loadOverrides(path) {
   }
   let raw;
   try {
-    raw = await readFile2(path, "utf8");
+    raw = await readFile3(path, "utf8");
   } catch {
     return EMPTY_OVERRIDES;
   }
-  const parsed = OverridesSchema.parse((0, import_yaml.parse)(raw) ?? {});
+  const parsed = OverridesSchema.parse((0, import_yaml2.parse)(raw) ?? {});
   return {
     prOverrides: new Map(Object.entries(parsed["pr-overrides"]).map(([number, sha]) => [Number(number), sha])),
     issueOverrides: new Map(
@@ -31108,7 +31132,7 @@ async function run2(options) {
 
 // src/action.ts
 async function main() {
-  const options = toRunOptions({
+  const options = await toRunOptions({
     owner: getInput("owner", { required: true }),
     repo: getInput("repo", { required: true }),
     token: getInput("token", { required: true }),
@@ -31116,6 +31140,7 @@ async function main() {
     gitDir: getInput("git-dir") || void 0,
     cachePath: getInput("cache-path") || void 0,
     overridesPath: getInput("overrides-path") || void 0,
+    configPath: getInput("config-path") || void 0,
     tagPattern: getInput("tag-pattern") || void 0,
     enhancementLabels: getInput("enhancement-labels") || void 0,
     bugLabels: getInput("bug-labels") || void 0,

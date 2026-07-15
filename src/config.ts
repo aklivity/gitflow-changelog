@@ -1,3 +1,4 @@
+import { loadRepoConfig } from './repo-config.js';
 import type { RunOptions } from './run.js';
 
 export interface RawInputs {
@@ -8,6 +9,7 @@ export interface RawInputs {
   gitDir?: string;
   cachePath?: string;
   overridesPath?: string;
+  configPath?: string;
   tagPattern?: string;
   enhancementLabels?: string;
   bugLabels?: string;
@@ -26,7 +28,7 @@ function splitLabels(value: string | undefined, fallback: string[]): string[] {
     .filter((label) => label.length > 0);
 }
 
-export function toRunOptions(raw: RawInputs): RunOptions {
+export async function toRunOptions(raw: RawInputs): Promise<RunOptions> {
   if (!raw.owner || !raw.repo)
   {
     throw new Error('owner and repo are required');
@@ -36,18 +38,21 @@ export function toRunOptions(raw: RawInputs): RunOptions {
     throw new Error('token is required');
   }
 
+  const gitDir = raw.gitDir ?? process.cwd();
+  const fileConfig = await loadRepoConfig(gitDir, raw.configPath ?? '.gitflow-changelog.yml');
+
   return {
     owner: raw.owner,
     repo: raw.repo,
     token: raw.token,
     ref: raw.ref ?? 'HEAD',
-    gitDir: raw.gitDir ?? process.cwd(),
+    gitDir,
     cachePath: raw.cachePath ?? '.gitflow-changelog-cache.json',
     overridesPath: raw.overridesPath,
-    tagPattern: new RegExp(raw.tagPattern ?? '.*'),
-    enhancementLabels: splitLabels(raw.enhancementLabels, ['enhancement']),
-    bugLabels: splitLabels(raw.bugLabels, ['bug']),
-    excludeLabels: splitLabels(raw.excludeLabels, ['duplicate', 'invalid', 'wontfix']),
-    format: raw.format ?? 'default',
+    tagPattern: new RegExp(raw.tagPattern || fileConfig['tag-pattern'] || '.*'),
+    enhancementLabels: splitLabels(raw.enhancementLabels, fileConfig['enhancement-labels'] ?? ['enhancement']),
+    bugLabels: splitLabels(raw.bugLabels, fileConfig['bug-labels'] ?? ['bug']),
+    excludeLabels: splitLabels(raw.excludeLabels, fileConfig['exclude-labels'] ?? ['duplicate', 'invalid', 'wontfix']),
+    format: raw.format || fileConfig.format || 'default',
   };
 }
