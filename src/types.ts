@@ -90,6 +90,10 @@ export const UpstreamConfig = z.object({
   'dependency-version-file': z.string(),
   'dependency-version-property': z.string(),
   classification: ClassificationLevel,
+  // Only consulted when classification is `maven`. Defaults to
+  // `io.aklivity.<repo-name>` (the convention every current Aklivity repo
+  // follows) when omitted, so most configs never need to set it.
+  'maven-group-id': z.string().optional(),
 });
 export type UpstreamConfig = z.infer<typeof UpstreamConfig>;
 

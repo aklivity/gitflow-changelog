@@ -92,14 +92,14 @@ describe('readVersionAtRef and computeVersionRanges', () => {
     expect(await readVersionAtRef('v0.9.0', 'pom.xml', 'zilla.version', { cwd: fixture.dir })).toBeUndefined();
   });
 
-  it('pairs each bucket with the version at the tag immediately before it, using the full tag sequence', async () => {
+  it('pairs every tag with the version at the tag immediately before it, using the full tag sequence', async () => {
     await writePom('1.2.4');
     await fixture.commit('bump to 1.2.4');
     await fixture.tag('v1.0.0', '2024-01-01T00:00:00Z');
 
     await writePom('1.2.5');
     await fixture.commit('bump to 1.2.5');
-    await fixture.tag('v1.1.0', '2024-02-01T00:00:00Z'); // no entries of its own — still a valid boundary
+    await fixture.tag('v1.1.0', '2024-02-01T00:00:00Z'); // no entries of its own — still gets its own range
 
     await writePom('1.2.6');
     await fixture.commit('bump to 1.2.6');
@@ -115,8 +115,22 @@ describe('readVersionAtRef and computeVersionRanges', () => {
 
     expect(ranges).toEqual([
       { bucketTag: 'v1.2.0', fromVersion: '1.2.5', toVersion: '1.2.6' },
+      { bucketTag: 'v1.1.0', fromVersion: '1.2.4', toVersion: '1.2.5' },
       { bucketTag: 'v1.0.0', fromVersion: undefined, toVersion: '1.2.4' },
     ]);
+  });
+
+  it('drops a range where nothing actually changed (headRef sitting exactly on the newest tag)', async () => {
+    await writePom('1.2.5');
+    await fixture.commit('bump to 1.2.5');
+    await fixture.tag('v1.0.0', '2024-01-01T00:00:00Z');
+
+    const placement = placementWithBuckets([{ tag: tag('v1.0.0'), entries: [pr(1)] }]);
+    placement.allTags = [tag('v1.0.0')];
+
+    const ranges = await computeVersionRanges(placement, 'develop', 'pom.xml', 'zilla.version', { cwd: fixture.dir });
+
+    expect(ranges).toEqual([{ bucketTag: 'v1.0.0', fromVersion: undefined, toVersion: '1.2.5' }]);
   });
 });
 

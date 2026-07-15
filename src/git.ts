@@ -75,6 +75,15 @@ export async function showFile(ref: string, path: string, options: GitOptions): 
   return result.code === 0 ? result.stdout : undefined;
 }
 
+// Full clone (not shallow) — fold-in placement needs the upstream repo's
+// complete tag and ancestry history, not just its recent commits. Auth is
+// embedded in the URL rather than passed as a separate git-credential step
+// since this clone is throwaway and never persisted.
+export async function cloneRepo(owner: string, repo: string, dir: string, token: string): Promise<void> {
+  const url = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
+  await execFileAsync('git', ['clone', '--quiet', url, dir]);
+}
+
 export async function searchCommitsReferencing(
   issueNumber: number,
   ref: string,

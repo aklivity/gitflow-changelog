@@ -4,7 +4,7 @@ import { showFile } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import { moduleDirFromPath, readDependencyVersion } from './maven.js';
-import type { ClassificationLevel, Entry, PlacementResult, UpstreamConfig } from './types.js';
+import type { ClassificationLevel, Entry, PlacementResult, Tag, UpstreamConfig } from './types.js';
 
 export interface VersionRange {
   bucketTag: string | null;
@@ -25,12 +25,16 @@ export async function readVersionAtRef(
   return pomXml === undefined ? undefined : readDependencyVersion(pomXml, property);
 }
 
-// Pairs each of this repo's own placement buckets with the dependency
-// version pinned at that point vs. the version pinned at the tag
-// immediately before it — using the full allTags sequence, not the
-// (possibly sparser) buckets list, so a tag with no entries of its own
-// still counts as a valid boundary. Computed fresh per release tag rather
-// than once off current HEAD, so a later dependency change never
+// Pairs every candidate bucket — Unreleased (headRef) plus every sectioned
+// tag in allTags — with the dependency version pinned at that point vs. the
+// version pinned at the tag immediately before it. Every tag is a
+// candidate, not just tags that happen to have a native bucket already: a
+// release with zero native entries can still have absorbed upstream
+// content worth its own heading, so version-range computation must not be
+// gated on native-entry presence. A range where nothing actually changed
+// (fromVersion === toVersion) is dropped here rather than left for callers
+// to filter — it isn't a range at all. Computed fresh per release tag
+// rather than once off current HEAD, so a later dependency change never
 // retroactively reclassifies an already-published historical release.
 export async function computeVersionRanges(
   placement: PlacementResult,
@@ -39,21 +43,33 @@ export async function computeVersionRanges(
   property: string,
   gitOptions: GitOptions,
 ): Promise<VersionRange[]> {
+  const candidates: Array<{ bucketTag: string | null; ref: string; previousTag: Tag | undefined }> = [
+    { bucketTag: null, ref: headRef, previousTag: placement.allTags[0] },
+    ...placement.allTags.map((tag, index) => ({
+      bucketTag: tag.name,
+      ref: tag.name,
+      previousTag: placement.allTags[index + 1],
+    })),
+  ];
+
   const ranges: VersionRange[] = [];
-  for (const bucket of placement.buckets)
+  for (const candidate of candidates)
   {
-    const ref = bucket.tag?.name ?? headRef;
-    const toVersion = await readVersionAtRef(ref, file, property, gitOptions);
+    const toVersion = await readVersionAtRef(candidate.ref, file, property, gitOptions);
     if (toVersion === undefined)
     {
       continue;
     }
 
-    const tagIndex = bucket.tag ? placement.allTags.findIndex((tag) => tag.name === bucket.tag?.name) : -1;
-    const previousTag = bucket.tag ? placement.allTags[tagIndex + 1] : placement.allTags[0];
-    const fromVersion = previousTag ? await readVersionAtRef(previousTag.name, file, property, gitOptions) : undefined;
+    const fromVersion = candidate.previousTag
+      ? await readVersionAtRef(candidate.previousTag.name, file, property, gitOptions)
+      : undefined;
+    if (fromVersion === toVersion)
+    {
+      continue;
+    }
 
-    ranges.push({ bucketTag: bucket.tag?.name ?? null, fromVersion, toVersion });
+    ranges.push({ bucketTag: candidate.bucketTag, fromVersion, toVersion });
   }
   return ranges;
 }
@@ -174,10 +190,6 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
   const sections = new Map<string | null, FoldInSection>();
   for (const range of ranges)
   {
-    if (range.fromVersion === range.toVersion)
-    {
-      continue;
-    }
     const candidates = selectUpstreamEntries(options.upstreamPlacement, range.fromVersion, range.toVersion);
     const entries = await filterForFoldIn(candidates, {
       level: options.upstream.classification,
