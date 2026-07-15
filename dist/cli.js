@@ -11710,9 +11710,18 @@ async function searchCommitsReferencing(issueNumber, ref, options) {
 function toTag(info) {
   return { name: info.name, sha: info.sha, date: info.date };
 }
+async function reachableFrom(tags, ref, gitOptions) {
+  const reachable = [];
+  for (const tag of tags) {
+    if (await isAncestor(tag.name, ref, gitOptions)) {
+      reachable.push(tag);
+    }
+  }
+  return reachable;
+}
 async function place(input, gitOptions) {
-  const allTags = await listTags(/.*/, gitOptions);
-  const sectionedTags = await listTags(input.tagPattern, gitOptions);
+  const allTags = await reachableFrom(await listTags(/.*/, gitOptions), input.ref, gitOptions);
+  const sectionedTags = await reachableFrom(await listTags(input.tagPattern, gitOptions), input.ref, gitOptions);
   const tagsByDateAsc = allTags.map(toTag).sort((a, b) => a.date.localeCompare(b.date));
   const sectionedNames = new Set(sectionedTags.map((tag) => tag.name));
   const bucketsByTag = /* @__PURE__ */ new Map();

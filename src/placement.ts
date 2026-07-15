@@ -12,9 +12,29 @@ function toTag(info: TagInfo): Tag {
   return { name: info.name, sha: info.sha, date: info.date };
 }
 
+async function reachableFrom(tags: TagInfo[], ref: string, gitOptions: GitOptions): Promise<TagInfo[]> {
+  const reachable: TagInfo[] = [];
+  for (const tag of tags)
+  {
+    if (await isAncestor(tag.name, ref, gitOptions))
+    {
+      reachable.push(tag);
+    }
+  }
+  return reachable;
+}
+
 export async function place(input: PlacementInput, gitOptions: GitOptions): Promise<PlacementResult> {
-  const allTags = await listTags(/.*/, gitOptions);
-  const sectionedTags = await listTags(input.tagPattern, gitOptions);
+  // Scope tags to this branch's own line of history before placing anything.
+  // `git tag --contains` answers "does any tag, on any line, contain this
+  // commit" — a tag from a disjoint gitflow line (e.g. a support/1.x-only
+  // release) can technically "contain" a commit while being completely
+  // irrelevant to the branch this changelog is being generated for. Without
+  // this filter, a support-branch-only tag leaks into develop's changelog
+  // (and vice versa) the moment any entry's commit happens to also be an
+  // ancestor of that other tag.
+  const allTags = await reachableFrom(await listTags(/.*/, gitOptions), input.ref, gitOptions);
+  const sectionedTags = await reachableFrom(await listTags(input.tagPattern, gitOptions), input.ref, gitOptions);
 
   const tagsByDateAsc = allTags
     .map(toTag)

@@ -84,4 +84,24 @@ describe('place', () => {
     expect(withEntry).toHaveLength(1);
     expect(withEntry[0].tag?.name).toBe('v1.0.0');
   });
+
+  it('never lets a tag from a disjoint gitflow line leak into this branch, even if it contains the entry', async () => {
+    await fixture.commit('base');
+    await fixture.branch('support/1.x');
+
+    await fixture.checkout('support/1.x');
+    const supportOnly = await fixture.commit('support-branch-only backport');
+    await fixture.tag('1.0.1', '2024-02-01T00:00:00Z');
+
+    await fixture.checkout('develop');
+    await fixture.commit('unrelated develop-only change');
+
+    const result = await place(
+      { entries: [pr(500, supportOnly)], ref: 'develop', tagPattern: /.*/ },
+      { cwd: fixture.dir },
+    );
+
+    expect(result.buckets.map((bucket) => bucket.tag?.name)).toEqual([]);
+    expect(result.dropped.map((entry) => entry.number)).toEqual([500]);
+  });
 });
