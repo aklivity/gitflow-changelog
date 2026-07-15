@@ -1,0 +1,86 @@
+name: gitflow-changelog
+description: >-
+  Generates a CHANGELOG for repositories using a gitflow branching model
+  (a long-running develop branch plus maintenance/support branches), placing
+  each issue and pull request under the release it actually shipped in by
+  walking git ancestry rather than trusting closed-at dates or timeline
+  events.
+author: Aklivity
+branding:
+  icon: file-text
+  color: purple
+
+inputs:
+  owner:
+    description: Repository owner.
+    required: false
+    default: ${{ github.repository_owner }}
+  repo:
+    description: Repository name.
+    required: false
+    default: ${{ github.event.repository.name }}
+  token:
+    description: GitHub token used to read issues, pull requests, and their events.
+    required: false
+    default: ${{ github.token }}
+  ref:
+    description: >-
+      Branch or ref to generate the changelog for. Entries not reachable from
+      this ref are dropped; entries reachable but not under any tag land in
+      Unreleased.
+    required: false
+    default: HEAD
+  git-dir:
+    description: >-
+      Path to a full clone of the repository (requires fetch-depth 0 — a
+      shallow clone cannot answer ancestry questions). Defaults to the
+      current working directory.
+    required: false
+  cache-path:
+    description: >-
+      Path to the incremental events cache file. Pair with actions/cache
+      using a stable key (not hash-based) so it is found and updated on
+      every run.
+    required: false
+    default: .gitflow-changelog-cache.json
+  overrides-path:
+    description: >-
+      Path to a YAML file (in the consuming repo) mapping PR/issue numbers to
+      a replacement commit SHA, for entries whose recorded commit no longer
+      exists (e.g. after a history rewrite on another branch).
+    required: false
+  tag-pattern:
+    description: >-
+      Regular expression selecting which tags get their own changelog
+      section (e.g. to exclude alpha/beta/rc pre-releases). Does not affect
+      ancestry placement, only which tags are rendered as sections.
+    required: false
+    default: .*
+  enhancement-labels:
+    description: Comma-separated labels categorized as "Implemented enhancements".
+    required: false
+    default: enhancement
+  bug-labels:
+    description: Comma-separated labels categorized as "Fixed bugs".
+    required: false
+    default: bug
+  exclude-labels:
+    description: Comma-separated labels excluded from the changelog entirely.
+    required: false
+    default: duplicate,invalid,wontfix
+  format:
+    description: Output renderer. Only "default" is available in v1.
+    required: false
+    default: default
+  output-path:
+    description: Path to write the generated changelog to.
+    required: false
+    default: CHANGELOG.md
+
+outputs:
+  changelog-path:
+    description: Path to the generated changelog file.
+
+runs:
+  using: node20
+  main: dist/index.js

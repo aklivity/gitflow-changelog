@@ -1,0 +1,8 @@
+node_modules/
+build/
+*.tsbuildinfo
+.DS_Store
+coverage/
+
+# dist/index.js and dist/cli.js are committed build artifacts —
+# GitHub Actions does not run `npm install` for JS actions at run time.
