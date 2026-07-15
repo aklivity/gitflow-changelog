@@ -14,9 +14,17 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Configure git credentials
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GITFLOW_RELEASES_TOKEN }}@github.com" > ~/.git-credentials
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -33,14 +41,11 @@ jobs:
 
       - name: Commit, tag, and push
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITFLOW_RELEASES_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="${{ inputs.version }}"
           MAJOR="v$(echo "$VERSION" | cut -d. -f1)"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # dist/ is gitignored on the branch itself — force-add it into this
           # one release commit, which is reachable only via the tags below,
