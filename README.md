@@ -160,16 +160,26 @@ npm test
 npm run build   # bundles src/cli.ts -> dist/cli.js and src/action.ts -> dist/index.js
 ```
 
-`dist/cli.js` and `dist/index.js` are committed build artifacts — GitHub
+`dist/` is gitignored and never committed on `develop`/`main` — GitHub
 Actions does not install dependencies for JavaScript actions at run time, so
-the bundle must be up to date in every commit. CI fails if `npm run build`
-produces a diff.
+a real, working action still needs `dist/index.js` to exist somewhere, but
+that somewhere is a release tag, not the development branch (see
+"Releasing" below). Don't build-and-commit `dist/` locally; `npm run build`
+is for local verification only.
 
 ## Releasing
 
 Releases are cut via the [Release workflow](./.github/workflows/release.yml)
 (`workflow_dispatch`, with a `version` input like `0.1.0`). It bumps
-`package.json`, rebuilds `dist/`, commits, and pushes two tags: the exact
-`vX.Y.Z` and a moving major-version tag (`v0` until a stable `v1`) that
-consumers reference via `uses: aklivity/gitflow-changelog@v0`, matching the
-convention used by `actions/checkout`, `actions/setup-node`, etc.
+`package.json`, builds `dist/`, and commits both into a single release
+commit — but that commit is never pushed onto the branch it was dispatched
+from. Instead, only two tags are pushed to point at it: the exact `vX.Y.Z`
+and a moving major-version tag (`v0` until a stable `v1`) that consumers
+reference via `uses: aklivity/gitflow-changelog@v0`, matching the convention
+used by `actions/checkout`, `actions/setup-node`, etc. `develop`/`main`
+themselves never see a version bump or a `dist/` commit — only the tags do.
+
+Because the release commit isn't part of `develop`'s own history, each
+release's commit is only reachable via its tag, not via `git log develop`;
+that's expected, not a bug — the whole point is keeping `dist/` and version
+bumps out of normal development history entirely.

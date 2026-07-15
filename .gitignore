@@ -4,5 +4,7 @@ build/
 .DS_Store
 coverage/
 
-# dist/index.js and dist/cli.js are committed build artifacts —
-# GitHub Actions does not run `npm install` for JS actions at run time.
+# dist/index.js and dist/cli.js are built and committed only by the Release
+# workflow, into a release-only commit that a version tag points at — never
+# on the develop/main branch itself. Do not build-and-commit these locally.
+dist/

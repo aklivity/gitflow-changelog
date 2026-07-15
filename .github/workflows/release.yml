@@ -42,12 +42,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add package.json package-lock.json dist
+          # dist/ is gitignored on the branch itself — force-add it into this
+          # one release commit, which is reachable only via the tags below,
+          # never pushed onto the branch. develop/main stay dist-free forever.
+          git add package.json package-lock.json
+          git add -f dist
           git commit -m "chore(release): v${VERSION}"
           git tag -a "v${VERSION}" -m "v${VERSION}"
           git tag -f "$MAJOR" HEAD
 
-          git push origin "HEAD:${{ github.ref_name }}"
           git push origin "v${VERSION}"
           git push origin -f "$MAJOR"
 
