@@ -205,6 +205,44 @@ export async function updateCache(
   return cache;
 }
 
+interface GithubPullRequestFile {
+  filename: string;
+}
+
+// Not part of /issues/events or the PR object itself — a genuine extra
+// per-item call, so callers should use this lazily (only for PRs a
+// classification consumer actually needs), never eagerly for all history.
+export async function fetchPullRequestFiles(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string,
+): Promise<string[]> {
+  const filenames: string[] = [];
+  for (let page = 1; ; page += 1)
+  {
+    const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${number}/files?per_page=${PER_PAGE}&page=${page}`;
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (!response.ok)
+    {
+      throw new Error(`GitHub API error fetching PR files (${owner}/${repo}#${number}, page ${page}): ${response.status} ${response.statusText}`);
+    }
+    const files = (await response.json()) as GithubPullRequestFile[];
+    filenames.push(...files.map((file) => file.filename));
+    if (files.length < PER_PAGE)
+    {
+      break;
+    }
+  }
+  return filenames;
+}
+
 export class GithubDriver implements Driver {
   private readonly cache: CacheFile;
 

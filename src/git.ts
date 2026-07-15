@@ -65,6 +65,16 @@ export async function listTags(pattern: RegExp, options: GitOptions): Promise<Ta
     .filter((tag) => pattern.test(tag.name));
 }
 
+// Reads a file's content at a specific ref (a tag, branch, or HEAD) without
+// checking it out — used to read a dependency-pinned version from a pom.xml
+// as it existed at a past release tag, not just the current working tree.
+// Returns undefined if the ref or path doesn't exist (e.g. the file didn't
+// exist yet at that tag).
+export async function showFile(ref: string, path: string, options: GitOptions): Promise<string | undefined> {
+  const result = await runAllowFailure(['show', `${ref}:${path}`], options);
+  return result.code === 0 ? result.stdout : undefined;
+}
+
 export async function searchCommitsReferencing(
   issueNumber: number,
   ref: string,

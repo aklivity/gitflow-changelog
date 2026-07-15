@@ -85,6 +85,23 @@ describe('place', () => {
     expect(withEntry[0].tag?.name).toBe('v1.0.0');
   });
 
+  it('reports allTags newest-first, including tags with no entries of their own', async () => {
+    await fixture.commit('base');
+    await fixture.tag('v1.0.0', '2024-01-01T00:00:00Z');
+    const c2 = await fixture.commit('a real fix');
+    await fixture.tag('v1.1.0', '2024-02-01T00:00:00Z');
+    await fixture.commit('nothing changelog-worthy');
+    await fixture.tag('v1.2.0', '2024-03-01T00:00:00Z');
+
+    const result = await place(
+      { entries: [issue(100, c2)], ref: 'develop', tagPattern: /.*/ },
+      { cwd: fixture.dir },
+    );
+
+    expect(result.allTags.map((tag) => tag.name)).toEqual(['v1.2.0', 'v1.1.0', 'v1.0.0']);
+    expect(result.buckets.map((bucket) => bucket.tag?.name)).toEqual(['v1.1.0']);
+  });
+
   it('never lets a tag from a disjoint gitflow line leak into this branch, even if it contains the entry', async () => {
     await fixture.commit('base');
     await fixture.branch('support/1.x');

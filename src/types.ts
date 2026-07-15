@@ -46,6 +46,12 @@ export const PlacementResult = z.object({
   buckets: z.array(Bucket),
   dropped: z.array(Entry),
   unresolved: z.array(UnresolvedEntry),
+  // Every sectioned tag reachable from ref, newest first, regardless of
+  // whether it ended up with any entries of its own — `buckets` omits
+  // empty tags, but fold-in range computation needs the full sequence to
+  // find "the tag immediately before this one," not "the nearest bucket
+  // that happened to have entries."
+  allTags: z.array(Tag),
 });
 export type PlacementResult = z.infer<typeof PlacementResult>;
 

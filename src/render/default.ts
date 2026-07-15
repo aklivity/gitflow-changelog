@@ -1,9 +1,15 @@
+import type { FoldInSection } from '../upstream.js';
 import type { Bucket, Entry, PlacementResult } from '../types.js';
 
 export interface RenderOptions {
   owner: string;
   repo: string;
 }
+
+// Keyed the same way PlacementResult buckets are: a tag name, or null for
+// Unreleased. A repo can fold in from more than one upstream source, so
+// each bucket maps to a list, not a single section.
+export type FoldInsByBucket = Map<string | null, FoldInSection[]>;
 
 const SPECIAL_CHARS = /[\\()[\]_*#]/g;
 
@@ -37,6 +43,26 @@ function renderEntry(entry: Entry, options: RenderOptions): string {
   return `- ${title} [\\#${entry.number}](${url})${authorLink(entry)}`;
 }
 
+function foldInOptions(repo: string): RenderOptions {
+  const [owner, name] = repo.split('/');
+  return { owner, repo: name };
+}
+
+// Fold-in entries render as a clearly attributed, distinct sub-section —
+// never blended into this repo's own native entries — so a reader can tell
+// inherited changes from this repo's own work at a glance.
+function renderFoldIn(section: FoldInSection): string {
+  const range = section.fromVersion ? `${section.fromVersion}–${section.toVersion}` : `up to ${section.toVersion}`;
+  const options = foldInOptions(section.repo);
+  const lines = [`**Included from ${options.repo} (${range}):**`, ''];
+  for (const entry of section.entries)
+  {
+    lines.push(renderEntry(entry, options));
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
 interface Section {
   heading: string;
   entries: Entry[];
@@ -61,7 +87,12 @@ function tagDate(isoDate: string): string {
   return isoDate.slice(0, 10);
 }
 
-function renderBucket(bucket: Bucket, previousTagName: string | undefined, options: RenderOptions): string {
+function renderBucket(
+  bucket: Bucket,
+  previousTagName: string | undefined,
+  options: RenderOptions,
+  foldIns: FoldInSection[],
+): string {
   const repoUrl = `https://github.com/${options.owner}/${options.repo}`;
   const lines: string[] = [];
 
@@ -92,10 +123,15 @@ function renderBucket(bucket: Bucket, previousTagName: string | undefined, optio
     lines.push('');
   }
 
+  for (const foldIn of foldIns)
+  {
+    lines.push(renderFoldIn(foldIn));
+  }
+
   return lines.join('\n');
 }
 
-export function render(placement: PlacementResult, options: RenderOptions): string {
+export function render(placement: PlacementResult, options: RenderOptions, foldIns: FoldInsByBucket = new Map()): string {
   const lines: string[] = ['# Changelog', ''];
 
   for (let index = 0; index < placement.buckets.length; index += 1)
@@ -103,7 +139,7 @@ export function render(placement: PlacementResult, options: RenderOptions): stri
     const bucket = placement.buckets[index];
     const next = placement.buckets[index + 1];
     const previousTagName = next?.tag?.name;
-    lines.push(renderBucket(bucket, previousTagName, options));
+    lines.push(renderBucket(bucket, previousTagName, options, foldIns.get(bucket.tag?.name ?? null) ?? []));
   }
 
   return `${lines.join('\n').trimEnd()}\n`;

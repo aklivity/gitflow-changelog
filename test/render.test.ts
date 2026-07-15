@@ -34,6 +34,7 @@ describe('render', () => {
     const placement: PlacementResult = {
       dropped: [],
       unresolved: [],
+      allTags: [],
       buckets: [
         {
           tag: null,
@@ -76,5 +77,62 @@ describe('render', () => {
 
     const v100Index = markdown.indexOf('## [v1.0.0]');
     expect(markdown.slice(v100Index, v100Index + 200)).not.toContain('Full Changelog');
+  });
+
+  it('renders a fold-in section as a distinct sub-section, never blended into native entries', () => {
+    const placement: PlacementResult = {
+      dropped: [],
+      unresolved: [],
+      allTags: [{ name: 'v1.1.0', sha: 'aaa', date: '2024-02-01T00:00:00+00:00' }],
+      buckets: [
+        {
+          tag: { name: 'v1.1.0', sha: 'aaa', date: '2024-02-01T00:00:00+00:00' },
+          entries: [entry({ number: 6, kind: 'pr', category: 'issue', title: 'Our own PR' })],
+        },
+      ],
+    };
+    const foldIns = new Map([
+      [
+        'v1.1.0',
+        [
+          {
+            repo: 'aklivity/zilla',
+            fromVersion: '1.2.5',
+            toVersion: '1.2.6',
+            entries: [entry({ number: 2080, kind: 'pr', category: 'issue', title: 'export telemetry events' })],
+          },
+        ],
+      ],
+    ]);
+
+    const markdown = render(placement, OPTIONS, foldIns);
+
+    expect(markdown).toContain('**Merged pull requests:**');
+    expect(markdown).toContain('- Our own PR [\\#6](https://github.com/aklivity/zilla/pull/6)');
+    expect(markdown).toContain('**Included from zilla (1.2.5–1.2.6):**');
+    expect(markdown).toContain('- export telemetry events [\\#2080](https://github.com/aklivity/zilla/pull/2080)');
+
+    const ownIndex = markdown.indexOf('Our own PR');
+    const foldInIndex = markdown.indexOf('Included from zilla');
+    expect(ownIndex).toBeLessThan(foldInIndex);
+  });
+
+  it('renders "up to" when there is no fromVersion (first release absorbed)', () => {
+    const placement: PlacementResult = {
+      dropped: [],
+      unresolved: [],
+      allTags: [],
+      buckets: [{ tag: null, entries: [] }],
+    };
+    const foldIns = new Map([
+      [
+        null,
+        [{ repo: 'aklivity/zilla', fromVersion: undefined, toVersion: '1.0.0', entries: [] }],
+      ],
+    ]);
+
+    const markdown = render(placement, OPTIONS, foldIns);
+
+    expect(markdown).toContain('**Included from zilla (up to 1.0.0):**');
   });
 });
