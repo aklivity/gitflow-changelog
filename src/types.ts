@@ -49,6 +49,36 @@ export const PlacementResult = z.object({
 });
 export type PlacementResult = z.infer<typeof PlacementResult>;
 
+// How much classification work is done, per data source. `maven` implies
+// `path` — it adds artifact awareness on top, needed only by the fold-in
+// feature. `none` is the default: a repo with no downstream fold-in
+// consumers doesn't need to classify or persist anything for anyone else's
+// benefit.
+export const ClassificationLevel = z.enum(['none', 'path', 'maven']);
+export type ClassificationLevel = z.infer<typeof ClassificationLevel>;
+
+// Path-based classification outcome for one PR. A PR classifies as `feature`
+// if ANY changed path matches a feature-include pattern, even if it also
+// touches excluded paths in the same diff — inclusive-OR toward "real,"
+// not requiring every path clean. Only PRs are classified (the underlying
+// GET /pulls/{number}/files call has no issue equivalent); issues pass
+// through fold-in filtering unclassified.
+export const PathClassification = z.enum(['feature', 'noise', 'test-only']);
+export type PathClassification = z.infer<typeof PathClassification>;
+
+// One upstream dependency to fold a filtered subset of into this repo's own
+// changelog. `dependency-version-file` + `dependency-version-property` say
+// where to read the pinned version from, at any given git ref (e.g. a
+// release tag), so the absorbed range can be computed as
+// (version at previous tag, version at this tag].
+export const UpstreamConfig = z.object({
+  repo: z.string(),
+  'dependency-version-file': z.string(),
+  'dependency-version-property': z.string(),
+  classification: ClassificationLevel,
+});
+export type UpstreamConfig = z.infer<typeof UpstreamConfig>;
+
 export interface DriverOptions {
   owner: string;
   repo: string;

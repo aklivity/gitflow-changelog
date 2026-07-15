@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
+import { ClassificationLevel, UpstreamConfig } from './types.js';
 
 const RepoConfigSchema = z.object({
   'tag-pattern': z.string().optional(),
@@ -9,6 +10,8 @@ const RepoConfigSchema = z.object({
   'bug-labels': z.array(z.string()).optional(),
   'exclude-labels': z.array(z.string()).optional(),
   format: z.string().optional(),
+  classification: ClassificationLevel.optional(),
+  upstream: z.array(UpstreamConfig).optional(),
 });
 export type RepoConfig = z.infer<typeof RepoConfigSchema>;
 
