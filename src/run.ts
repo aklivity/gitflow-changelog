@@ -1,9 +1,7 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCache, saveCache } from './cache.js';
 import { GithubDriver } from './drivers/github.js';
-import { cloneRepo } from './git.js';
+import { cloneOrUpdateRepo } from './git.js';
 import { readDependencySet, readModuleArtifactIds } from './maven.js';
 import { EMPTY_OVERRIDES, loadOverrides } from './overrides.js';
 import { place } from './placement.js';
@@ -29,6 +27,7 @@ export interface RunOptions {
   excludeLabels: string[];
   format: string;
   upstream: UpstreamConfig[];
+  upstreamCacheDir: string;
 }
 
 export interface RunResult {
@@ -77,75 +76,72 @@ function withFoldInOnlyBuckets(placement: Awaited<ReturnType<typeof place>>, fol
 }
 
 // Fold-in needs the upstream repo's own full git history (tags + ancestry),
-// not just what the GitHub API returns, so it gets its own throwaway
-// clone — the consuming repo's checkout (options.gitDir) has none of that.
-// Reads the upstream's own .gitflow-changelog.yml so its tag pattern and
-// label categorization stay owned by that repo, same as any direct run
-// against it would use.
+// not just what the GitHub API returns — the consuming repo's checkout
+// (options.gitDir) has none of that. The clone lives under
+// options.upstreamCacheDir rather than a throwaway temp dir, and
+// cloneOrUpdateRepo fetches instead of re-cloning once it's there — the
+// point of a stable path is that a caller can persist it across runs (e.g.
+// via actions/cache) so a full history transfer only happens once, not on
+// every single run. Reads the upstream's own .gitflow-changelog.yml so its
+// tag pattern and label categorization stay owned by that repo, same as any
+// direct run against it would use.
 async function computeUpstreamFoldIn(
   upstream: UpstreamConfig,
   ownPlacement: Awaited<ReturnType<typeof place>>,
   options: RunOptions,
 ): Promise<Map<string | null, FoldInSection>> {
   const [upstreamOwner, upstreamRepo] = upstream.repo.split('/');
-  const upstreamDir = await mkdtemp(join(tmpdir(), 'gitflow-changelog-upstream-'));
+  const upstreamDir = join(options.upstreamCacheDir, `${upstreamOwner}-${upstreamRepo}`);
 
-  try
-  {
-    await cloneRepo(upstreamOwner, upstreamRepo, upstreamDir, options.token);
+  await cloneOrUpdateRepo(upstreamOwner, upstreamRepo, upstreamDir, options.token);
 
-    const upstreamFileConfig = await loadRepoConfig(upstreamDir, '.gitflow-changelog.yml');
-    const upstreamCachePath = `${options.cachePath}.upstream-${upstreamOwner}-${upstreamRepo}.json`;
-    const upstreamCache = await loadCache(upstreamCachePath);
-    const upstreamDriverOptions: DriverOptions = {
-      owner: upstreamOwner,
-      repo: upstreamRepo,
-      token: options.token,
-      enhancementLabels: upstreamFileConfig['enhancement-labels'] ?? ['enhancement'],
-      bugLabels: upstreamFileConfig['bug-labels'] ?? ['bug'],
-      excludeLabels: upstreamFileConfig['exclude-labels'] ?? ['duplicate', 'invalid', 'wontfix'],
-    };
+  const upstreamFileConfig = await loadRepoConfig(upstreamDir, '.gitflow-changelog.yml');
+  const upstreamCachePath = `${options.cachePath}.upstream-${upstreamOwner}-${upstreamRepo}.json`;
+  const upstreamCache = await loadCache(upstreamCachePath);
+  const upstreamDriverOptions: DriverOptions = {
+    owner: upstreamOwner,
+    repo: upstreamRepo,
+    token: options.token,
+    enhancementLabels: upstreamFileConfig['enhancement-labels'] ?? ['enhancement'],
+    bugLabels: upstreamFileConfig['bug-labels'] ?? ['bug'],
+    excludeLabels: upstreamFileConfig['exclude-labels'] ?? ['duplicate', 'invalid', 'wontfix'],
+  };
 
-    const upstreamDriver = new GithubDriver(upstreamCache);
-    const upstreamEntries = await upstreamDriver.fetchEntries(upstreamDriverOptions);
-    await saveCache(upstreamCachePath, upstreamCache);
+  const upstreamDriver = new GithubDriver(upstreamCache);
+  const upstreamEntries = await upstreamDriver.fetchEntries(upstreamDriverOptions);
+  await saveCache(upstreamCachePath, upstreamCache);
 
-    const { resolved: upstreamResolved } = await resolveHashes(
-      { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD' },
-      { cwd: upstreamDir },
-    );
-    const upstreamPlacement = await place(
-      {
-        entries: upstreamResolved,
-        ref: 'HEAD',
-        tagPattern: new RegExp(upstreamFileConfig['tag-pattern'] || '.*'),
-      },
-      { cwd: upstreamDir },
-    );
+  const { resolved: upstreamResolved } = await resolveHashes(
+    { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD' },
+    { cwd: upstreamDir },
+  );
+  const upstreamPlacement = await place(
+    {
+      entries: upstreamResolved,
+      ref: 'HEAD',
+      tagPattern: new RegExp(upstreamFileConfig['tag-pattern'] || '.*'),
+    },
+    { cwd: upstreamDir },
+  );
 
-    const dependencySet = upstream.classification === 'maven'
-      ? await readDependencySet(options.gitDir, upstream['maven-group-id'] ?? `io.aklivity.${upstreamRepo}`)
-      : undefined;
-    const moduleArtifactIds = upstream.classification === 'maven'
-      ? await readModuleArtifactIds(upstreamDir)
-      : undefined;
+  const dependencySet = upstream.classification === 'maven'
+    ? await readDependencySet(options.gitDir, upstream['maven-group-id'] ?? `io.aklivity.${upstreamRepo}`)
+    : undefined;
+  const moduleArtifactIds = upstream.classification === 'maven'
+    ? await readModuleArtifactIds(upstreamDir)
+    : undefined;
 
-    return await computeFoldIn({
-      upstream,
-      placement: ownPlacement,
-      upstreamPlacement,
-      headRef: options.ref,
-      gitDir: options.gitDir,
-      gitOptions: { cwd: options.gitDir },
-      dependencySet,
-      moduleArtifactIds,
-      token: options.token,
-    });
-  }
-  finally
-  {
-    await rm(upstreamDir, { recursive: true, force: true });
-  }
+  return await computeFoldIn({
+    upstream,
+    placement: ownPlacement,
+    upstreamPlacement,
+    headRef: options.ref,
+    gitDir: options.gitDir,
+    gitOptions: { cwd: options.gitDir },
+    dependencySet,
+    moduleArtifactIds,
+    token: options.token,
+  });
 }
 
 export async function run(options: RunOptions): Promise<RunResult> {

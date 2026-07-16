@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,15 +41,18 @@ function entry(overrides: Partial<Entry> & { sha: string; number: number }): Ent
 describe('run — upstream fold-in wiring', () => {
   let consumer: GitFixture;
   let upstream: GitFixture;
+  let upstreamCacheDir: string;
 
   beforeEach(async () => {
     consumer = await createGitFixture();
     upstream = await createGitFixture();
+    upstreamCacheDir = await mkdtemp(join(tmpdir(), 'gitflow-changelog-upstream-cache-'));
   });
 
   afterEach(async () => {
     await consumer.cleanup();
     await upstream.cleanup();
+    await rm(upstreamCacheDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 
@@ -75,7 +79,7 @@ describe('run — upstream fold-in wiring', () => {
       if (options.repo === 'engine') return [upstreamBugfix, upstreamFeature];
       return [];
     });
-    vi.spyOn(gitModule, 'cloneRepo').mockImplementation(async (_owner, _repo, dir) => {
+    vi.spyOn(gitModule, 'cloneOrUpdateRepo').mockImplementation(async (_owner, _repo, dir) => {
       await execFileAsync('git', ['clone', '--quiet', upstream.dir, dir]);
     });
 
@@ -86,6 +90,7 @@ describe('run — upstream fold-in wiring', () => {
       ref: 'develop',
       gitDir: consumer.dir,
       cachePath: join(consumer.dir, '.gitflow-changelog-cache.json'),
+      upstreamCacheDir,
       tagPattern: /^v\d+\.\d+\.\d+$/,
       enhancementLabels: ['enhancement'],
       bugLabels: ['bug'],

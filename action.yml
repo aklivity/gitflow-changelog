@@ -59,6 +59,18 @@ inputs:
       overrides and take precedence over the file when set.
     required: false
     default: .gitflow-changelog.yml
+  upstream-cache-dir:
+    description: >-
+      Directory each configured upstream source (see the "upstream" key in
+      config-path) is cloned into. Only used when the config declares at
+      least one upstream source. Pair with actions/cache using a stable key
+      (not hash-based, and not scoped to the current branch — the same
+      upstream history is relevant regardless of which branch is generating
+      a changelog) so the clone persists across runs: it's updated with a
+      fetch on every run after the first, rather than re-cloning full
+      history from scratch every time.
+    required: false
+    default: .gitflow-changelog-upstream
   tag-pattern:
     description: >-
       Regular expression selecting which tags get their own changelog

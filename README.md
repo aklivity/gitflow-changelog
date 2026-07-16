@@ -115,6 +115,15 @@ Pair `cache-path` with `actions/cache` using a **stable key** (not
 hash-based, e.g. `gitflow-changelog-v1-${{ github.repository }}`) so the
 cache is found and updated on every run rather than only on exact matches.
 
+The same applies to `upstream-cache-dir`, used only when `.gitflow-changelog.yml`
+declares an `upstream` source: placing an upstream repo's entries under the
+right release needs its full git history, and `git fetch` on an existing
+clone only transfers what changed since last time — a full clone's cost is
+paid once, not on every run, as long as the directory is cached across runs
+the same way. Use a key that's stable across branches too (the upstream
+repo's history is the same regardless of which of *your* branches is
+generating a changelog).
+
 ## Unresolved commit hashes
 
 A recorded `merge_commit_sha` or closing `commit_id` can point at a commit
