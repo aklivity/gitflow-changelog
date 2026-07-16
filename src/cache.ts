@@ -20,11 +20,17 @@ const CacheFileSchema = z.object({
   schemaVersion: z.literal(CACHE_SCHEMA_VERSION),
   lastEventId: z.number().int().nonnegative(),
   entries: z.record(z.string(), CacheEntrySchema),
+  // Keyed by PR number. A merged PR's file list never changes, so unlike
+  // `entries` (kept fresh via `lastEventId`) this never needs invalidation —
+  // only ever grows. Optional + defaulted rather than added via a
+  // schemaVersion bump, so existing cache files without it still parse and
+  // don't force a full cold-start re-walk of the events cache.
+  prFiles: z.record(z.string(), z.array(z.string())).optional().default({}),
 });
 export type CacheFile = z.infer<typeof CacheFileSchema>;
 
 export function emptyCache(): CacheFile {
-  return { schemaVersion: CACHE_SCHEMA_VERSION, lastEventId: 0, entries: {} };
+  return { schemaVersion: CACHE_SCHEMA_VERSION, lastEventId: 0, entries: {}, prFiles: {} };
 }
 
 export async function loadCache(path: string): Promise<CacheFile> {
