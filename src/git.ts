@@ -142,22 +142,51 @@ export async function cloneOrUpdateRepo(owner: string, repo: string, dir: string
   await runGit(['checkout', '--quiet', '-B', defaultBranch, `origin/${defaultBranch}`], dir);
 }
 
-export async function searchCommitsReferencing(
-  issueNumber: number,
-  ref: string,
-  options: GitOptions,
-): Promise<string[]> {
-  const pattern = String.raw`(^|[^0-9])#${issueNumber}([^0-9]|$)`;
-  const result = await runAllowFailure(
-    ['log', ref, '--format=%H', '--extended-regexp', `--grep=${pattern}`],
-    options,
-  );
+// Field/record separators unlikely to appear in a commit message, used to
+// split `git log`'s single stdout blob back into (sha, body) pairs below.
+const FIELD_SEP = '\x1f';
+const RECORD_SEP = '\x1e';
+
+// Extracts every "#<number>" commit-message reference reachable from `ref`
+// in a single history walk, bucketed by number (newest commit first within
+// each bucket, matching git log's default order). Used to resolve the
+// "recorded commit no longer exists in this repo, likely history rewrite"
+// fallback in resolve.ts for every affected entry at once, instead of one
+// `git log --grep` walk (and thus one full history scan) per entry — see
+// issue #13.
+export async function scanCommitsReferencingNumbers(ref: string, options: GitOptions): Promise<Map<number, string[]>> {
+  const byNumber = new Map<number, string[]>();
+  const result = await runAllowFailure(['log', ref, `--format=%H${FIELD_SEP}%B${RECORD_SEP}`], options);
   if (result.code !== 0)
   {
-    return [];
+    return byNumber;
   }
-  return result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+
+  const pattern = /(?<![0-9])#([0-9]+)(?![0-9])/g;
+  for (const record of result.stdout.split(RECORD_SEP))
+  {
+    const trimmed = record.trim();
+    const separatorIndex = trimmed.indexOf(FIELD_SEP);
+    if (separatorIndex === -1)
+    {
+      continue;
+    }
+
+    const sha = trimmed.slice(0, separatorIndex);
+    const body = trimmed.slice(separatorIndex + 1);
+    const seen = new Set<number>();
+    for (const match of body.matchAll(pattern))
+    {
+      const number = Number(match[1]);
+      if (seen.has(number))
+      {
+        continue;
+      }
+      seen.add(number);
+      const bucket = byNumber.get(number) ?? [];
+      bucket.push(sha);
+      byNumber.set(number, bucket);
+    }
+  }
+  return byNumber;
 }

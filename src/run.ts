@@ -112,7 +112,7 @@ async function computeUpstreamFoldIn(
   const upstreamEntries = await upstreamDriver.fetchEntries(upstreamDriverOptions);
 
   const { resolved: upstreamResolved } = await resolveHashes(
-    { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD' },
+    { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD', hashFallbackCache: upstreamCache.hashFallbacks },
     { cwd: upstreamDir },
   );
 
@@ -167,9 +167,16 @@ export async function run(options: RunOptions): Promise<RunResult> {
 
   const overrides = await loadOverrides(options.overridesPath);
   const { resolved, unresolved, warnings } = await resolveHashes(
-    { entries, overrides, ref: options.ref },
+    { entries, overrides, ref: options.ref, hashFallbackCache: cache.hashFallbacks },
     { cwd: options.gitDir },
   );
+
+  // Re-saved here (in addition to the earlier save right after
+  // fetchEntries) because resolveHashes mutates cache.hashFallbacks in
+  // place as it discovers history-rewrite substitutions — those need to
+  // reach disk too, not just the entries/lastEventId snapshot taken before
+  // resolution ran.
+  await saveCache(options.cachePath, cache);
 
   const placement = await place(
     { entries: resolved, ref: options.ref, tagPattern: options.tagPattern },
