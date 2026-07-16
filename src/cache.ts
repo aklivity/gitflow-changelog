@@ -16,6 +16,12 @@ const CacheEntrySchema = z.object({
 });
 export type CacheEntry = z.infer<typeof CacheEntrySchema>;
 
+const HashFallbackSchema = z.object({
+  originalSha: z.string(),
+  resolvedSha: z.string(),
+});
+export type HashFallback = z.infer<typeof HashFallbackSchema>;
+
 const CacheFileSchema = z.object({
   schemaVersion: z.literal(CACHE_SCHEMA_VERSION),
   lastEventId: z.number().int().nonnegative(),
@@ -26,11 +32,18 @@ const CacheFileSchema = z.object({
   // schemaVersion bump, so existing cache files without it still parse and
   // don't force a full cold-start re-walk of the events cache.
   prFiles: z.record(z.string(), z.array(z.string())).optional().default({}),
+  // Keyed by `${kind}:${number}`. Persists the outcome of the "recorded sha
+  // no longer exists, likely history rewrite" fallback search in resolve.ts,
+  // so that full-history scan only ever runs once per entry rather than on
+  // every single run. `originalSha` guards against staleness: a cache entry
+  // is only trusted when it still matches the currently-recorded sha for
+  // that entry. Optional + defaulted, same rationale as `prFiles`.
+  hashFallbacks: z.record(z.string(), HashFallbackSchema).optional().default({}),
 });
 export type CacheFile = z.infer<typeof CacheFileSchema>;
 
 export function emptyCache(): CacheFile {
-  return { schemaVersion: CACHE_SCHEMA_VERSION, lastEventId: 0, entries: {}, prFiles: {} };
+  return { schemaVersion: CACHE_SCHEMA_VERSION, lastEventId: 0, entries: {}, prFiles: {}, hashFallbacks: {} };
 }
 
 export async function loadCache(path: string): Promise<CacheFile> {
