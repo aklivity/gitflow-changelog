@@ -159,6 +159,13 @@ Resolution order, highest precedence first:
   categorization is driven entirely by event-sourced label state.
 - A GitHub username change has no corresponding issue event, so a cached
   `login` can go stale — cosmetic (wrong link text), not a placement error.
+- An issue closed manually (no linked commit or merged pull request) has no
+  commit to place it against and is correctly dropped, same as an
+  unreachable PR. An issue closed via a merged PR's closing keyword
+  (`Fixes #N`, `Closes #N`, `Resolves #N`, case-insensitive) is placed using
+  that PR's merge commit instead — the repo-wide `/issues/events` feed's own
+  `closed` event only carries a `commit_id` for direct-commit closes, not
+  ones closed via a linked PR.
 
 ## Development
 
