@@ -1,10 +1,9 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
 import type { GitOptions } from './git.js';
-import { showFile } from './git.js';
+import { isAncestor, showFile } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import { moduleDirFromPath, readDependencyVersion } from './maven.js';
-import { place } from './placement.js';
 import type { ClassificationLevel, Entry, PlacementResult, Tag, UpstreamConfig } from './types.js';
 
 export interface VersionRange {
@@ -75,33 +74,35 @@ export async function computeVersionRanges(
   return ranges;
 }
 
-// Entries from the upstream repo's own placement that fall strictly after
-// fromVersion (exclusive) and up to and including toVersion — found by tag
-// name, not by re-deriving ancestry a second time. Assumes fromVersion and
-// toVersion, when present, correspond to real tags in the upstream repo's
-// own placement (true whenever a consumer only ever pins an actually
-// released version, which is the normal case).
-export function selectUpstreamEntries(
-  upstreamPlacement: PlacementResult,
+// Entries reachable from toVersion but not from fromVersion, resolved by
+// direct git ancestry against the literal ref strings a consumer's build
+// file pins — not by looking them up as bucket names in a tagPattern-scoped
+// placement. A consumer has no obligation to only ever pin versions that
+// look like upstream's idea of a "real" release (e.g. tracking upstream's
+// own develop line via an alpha/rc version); as long as the pinned string
+// resolves to a real commit in upstream's history, ancestry alone is
+// enough to bound "what shipped in this exact dependency bump," regardless
+// of how upstream chooses to section its own rendered changelog.
+export async function selectEntriesByVersionRange(
+  entries: Entry[],
   fromVersion: string | undefined,
   toVersion: string,
-): Entry[] {
-  const toIndex = upstreamPlacement.buckets.findIndex((bucket) => bucket.tag?.name === toVersion);
-  if (toIndex === -1)
+  gitOptions: GitOptions,
+): Promise<Entry[]> {
+  const selected: Entry[] = [];
+  for (const entry of entries)
   {
-    return [];
+    if (!(await isAncestor(entry.sha, toVersion, gitOptions)))
+    {
+      continue;
+    }
+    if (fromVersion && (await isAncestor(entry.sha, fromVersion, gitOptions)))
+    {
+      continue;
+    }
+    selected.push(entry);
   }
-  const fromIndex = fromVersion
-    ? upstreamPlacement.buckets.findIndex((bucket) => bucket.tag?.name === fromVersion)
-    : upstreamPlacement.buckets.length;
-  const upperBound = fromIndex === -1 ? upstreamPlacement.buckets.length : fromIndex;
-
-  const entries: Entry[] = [];
-  for (let index = toIndex; index < upperBound; index += 1)
-  {
-    entries.push(...upstreamPlacement.buckets[index].entries);
-  }
-  return entries;
+  return selected;
 }
 
 export interface FoldInFilterOptions {
@@ -225,7 +226,6 @@ export interface ComputeFoldInOptions {
   upstream: UpstreamConfig;
   placement: PlacementResult;
   upstreamEntries: Entry[];
-  upstreamTagPattern: RegExp;
   upstreamGitOptions: GitOptions;
   headRef: string;
   gitDir: string;
@@ -235,36 +235,6 @@ export interface ComputeFoldInOptions {
   token: string;
   patterns?: ClassificationPatterns;
   prFilesCache?: Record<string, string[]>;
-}
-
-// Places the upstream repo's own entries scoped to a specific pinned
-// version tag, not to the upstream's default branch. A tag's own history
-// already includes everything that shipped in it — including a commit that
-// only ever landed on the upstream's own maintenance branch (e.g. a
-// support/1.x-only backport that was never merged forward to develop) —
-// so scoping ancestry to the tag itself finds that content regardless of
-// which upstream branch produced it. This is the mechanism that lets a
-// consumer fold in the right entries for both an upstream develop-line
-// version and a later upstream support-line version without either side
-// needing to know which branch the other is on. Different ranges can pin
-// different upstream versions, so this is computed fresh per distinct
-// toVersion rather than once for the whole run — memoized since multiple
-// ranges (e.g. Unreleased and the latest tag) commonly share one.
-async function placeUpstreamAt(
-  ref: string,
-  upstreamEntries: Entry[],
-  upstreamTagPattern: RegExp,
-  upstreamGitOptions: GitOptions,
-  cache: Map<string, PlacementResult>,
-): Promise<PlacementResult> {
-  const cached = cache.get(ref);
-  if (cached)
-  {
-    return cached;
-  }
-  const computed = await place({ entries: upstreamEntries, ref, tagPattern: upstreamTagPattern }, upstreamGitOptions);
-  cache.set(ref, computed);
-  return computed;
 }
 
 // Ties the pieces together for one upstream source: a FoldInSection per
@@ -280,18 +250,15 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
     options.gitOptions,
   );
 
-  const placementByVersion = new Map<string, PlacementResult>();
   const sections = new Map<string | null, FoldInSection>();
   for (const range of ranges)
   {
-    const upstreamPlacement = await placeUpstreamAt(
-      range.toVersion,
+    const candidates = await selectEntriesByVersionRange(
       options.upstreamEntries,
-      options.upstreamTagPattern,
+      range.fromVersion,
+      range.toVersion,
       options.upstreamGitOptions,
-      placementByVersion,
     );
-    const candidates = selectUpstreamEntries(upstreamPlacement, range.fromVersion, range.toVersion);
     const entries = await filterForFoldIn(candidates, {
       level: options.upstream.classification,
       owner: upstreamOwner,
