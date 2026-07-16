@@ -1,7 +1,7 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
 import type { GitOptions, TagInfo } from './git.js';
 import { listTags, showFile, tagsContaining } from './git.js';
-import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from './classification.js';
+import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import type { MavenModule } from './maven.js';
 import { readDependencyVersion, resolveModule } from './maven.js';
@@ -237,11 +237,20 @@ export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOpt
 
   const pathsByNumber = await resolvePullRequestFiles(pullRequests, options);
 
+  // An explicit override always wins. Otherwise, whenever a Maven module
+  // index is available (any 'maven'-classified upstream) it's strictly more
+  // precise than the hardcoded default — derived from the upstream's own
+  // pom.xml layout instead of a guessed directory convention — so prefer
+  // it; fall back to the hardcoded default only when there's no module
+  // index at all (a 'path'-level or non-Maven upstream).
+  const patterns = options.patterns
+    ?? (options.modules ? { featurePaths: featurePathsFromModules(options.modules), testPaths: DEFAULT_CLASSIFICATION_PATTERNS.testPaths } : DEFAULT_CLASSIFICATION_PATTERNS);
+
   const filtered: Entry[] = [];
   for (const entry of pullRequests)
   {
     const paths = pathsByNumber.get(entry.number) ?? [];
-    const classification = classifyPaths(paths, options.patterns ?? DEFAULT_CLASSIFICATION_PATTERNS);
+    const classification = classifyPaths(paths, patterns);
     if (classification !== 'feature')
     {
       continue;

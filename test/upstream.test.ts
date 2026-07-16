@@ -275,10 +275,11 @@ describe('filterForFoldIn', () => {
     expect(entries.map((e) => e.number)).toEqual([1]);
   });
 
-  // classifyPaths' own default featurePaths list (runtime/, specs/,
-  // incubator/) is a separate, independently-configurable concern from
-  // module resolution — overridden here so this test isolates the
-  // resolveModule/module-index behavior it's actually about.
+  // No `patterns` override here at all — both classification (deriving
+  // featurePaths from the module index, per classification.ts's
+  // featurePathsFromModules) and module resolution (resolveModule) now
+  // discover a top-level module like `manager` with zero runtime/-prefix
+  // knowledge anywhere in the pipeline.
   it('resolves a touched module by nearest enclosing pom.xml, not a runtime/-prefix assumption', async () => {
     vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
       if (number === 1) return ['manager/src/main/java/io/example/Foo.java'];
@@ -297,7 +298,6 @@ describe('filterForFoldIn', () => {
       token: 't',
       dependencySet: new Set(['manager']),
       modules,
-      patterns: { featurePaths: ['**/src/main/**'], testPaths: ['**/src/test/**'] },
     });
 
     expect(entries.map((e) => e.number)).toEqual([1]);

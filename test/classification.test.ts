@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from '../src/classification.js';
+import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules } from '../src/classification.js';
+import type { MavenModule } from '../src/maven.js';
 
 describe('classifyPaths', () => {
   it('classifies as feature when any path matches a feature pattern', () => {
@@ -63,5 +64,35 @@ describe('classifyPaths', () => {
       'specs/**',
       'incubator/**/src/main/**',
     ]);
+  });
+});
+
+describe('featurePathsFromModules', () => {
+  it('derives a src/main glob per discovered module directory, nested or top-level alike', () => {
+    const modules: MavenModule[] = [
+      { dir: 'runtime/binding-kafka', artifactId: 'binding-kafka', dependencies: [] },
+      { dir: 'manager', artifactId: 'manager', dependencies: [] },
+    ];
+    expect(featurePathsFromModules(modules)).toEqual([
+      'runtime/binding-kafka/src/main/**',
+      'manager/src/main/**',
+    ]);
+  });
+
+  it('a change under a top-level module\'s own src/main now classifies as feature, with no runtime/ knowledge', () => {
+    const modules: MavenModule[] = [{ dir: 'manager', artifactId: 'manager', dependencies: [] }];
+    const patterns = { featurePaths: featurePathsFromModules(modules), testPaths: DEFAULT_CLASSIFICATION_PATTERNS.testPaths };
+    expect(classifyPaths(['manager/src/main/java/io/example/Foo.java'], patterns)).toBe('feature');
+  });
+
+  it('a module\'s own test-only sources still classify as test-only, not blanket feature', () => {
+    const modules: MavenModule[] = [{ dir: 'specs/binding-kafka.spec', artifactId: 'binding-kafka.spec', dependencies: [] }];
+    const patterns = { featurePaths: featurePathsFromModules(modules), testPaths: DEFAULT_CLASSIFICATION_PATTERNS.testPaths };
+    expect(classifyPaths(['specs/binding-kafka.spec/src/test/java/BarIT.java'], patterns)).toBe('test-only');
+  });
+
+  it('handles a module at the checkout root (empty dir) without a leading slash', () => {
+    const modules: MavenModule[] = [{ dir: '', artifactId: 'root', dependencies: [] }];
+    expect(featurePathsFromModules(modules)).toEqual(['src/main/**']);
   });
 });
