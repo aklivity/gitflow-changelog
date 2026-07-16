@@ -4,6 +4,7 @@ import { showFile } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import { moduleDirFromPath, readDependencyVersion } from './maven.js';
+import { place } from './placement.js';
 import type { ClassificationLevel, Entry, PlacementResult, Tag, UpstreamConfig } from './types.js';
 
 export interface VersionRange {
@@ -164,7 +165,9 @@ export interface FoldInSection {
 export interface ComputeFoldInOptions {
   upstream: UpstreamConfig;
   placement: PlacementResult;
-  upstreamPlacement: PlacementResult;
+  upstreamEntries: Entry[];
+  upstreamTagPattern: RegExp;
+  upstreamGitOptions: GitOptions;
   headRef: string;
   gitDir: string;
   gitOptions: GitOptions;
@@ -172,6 +175,36 @@ export interface ComputeFoldInOptions {
   moduleArtifactIds?: Map<string, string>;
   token: string;
   patterns?: ClassificationPatterns;
+}
+
+// Places the upstream repo's own entries scoped to a specific pinned
+// version tag, not to the upstream's default branch. A tag's own history
+// already includes everything that shipped in it — including a commit that
+// only ever landed on the upstream's own maintenance branch (e.g. a
+// support/1.x-only backport that was never merged forward to develop) —
+// so scoping ancestry to the tag itself finds that content regardless of
+// which upstream branch produced it. This is the mechanism that lets a
+// consumer fold in the right entries for both an upstream develop-line
+// version and a later upstream support-line version without either side
+// needing to know which branch the other is on. Different ranges can pin
+// different upstream versions, so this is computed fresh per distinct
+// toVersion rather than once for the whole run — memoized since multiple
+// ranges (e.g. Unreleased and the latest tag) commonly share one.
+async function placeUpstreamAt(
+  ref: string,
+  upstreamEntries: Entry[],
+  upstreamTagPattern: RegExp,
+  upstreamGitOptions: GitOptions,
+  cache: Map<string, PlacementResult>,
+): Promise<PlacementResult> {
+  const cached = cache.get(ref);
+  if (cached)
+  {
+    return cached;
+  }
+  const computed = await place({ entries: upstreamEntries, ref, tagPattern: upstreamTagPattern }, upstreamGitOptions);
+  cache.set(ref, computed);
+  return computed;
 }
 
 // Ties the pieces together for one upstream source: a FoldInSection per
@@ -187,10 +220,18 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
     options.gitOptions,
   );
 
+  const placementByVersion = new Map<string, PlacementResult>();
   const sections = new Map<string | null, FoldInSection>();
   for (const range of ranges)
   {
-    const candidates = selectUpstreamEntries(options.upstreamPlacement, range.fromVersion, range.toVersion);
+    const upstreamPlacement = await placeUpstreamAt(
+      range.toVersion,
+      options.upstreamEntries,
+      options.upstreamTagPattern,
+      options.upstreamGitOptions,
+      placementByVersion,
+    );
+    const candidates = selectUpstreamEntries(upstreamPlacement, range.fromVersion, range.toVersion);
     const entries = await filterForFoldIn(candidates, {
       level: options.upstream.classification,
       owner: upstreamOwner,
