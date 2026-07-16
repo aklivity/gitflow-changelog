@@ -93,5 +93,5 @@ export async function place(input: PlacementInput, gitOptions: GitOptions): Prom
     }
   }
 
-  return { buckets, dropped, unresolved: [] };
+  return { buckets, dropped, unresolved: [], allTags: orderedSectionedTags };
 }

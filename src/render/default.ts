@@ -1,9 +1,15 @@
+import type { FoldInSection } from '../upstream.js';
 import type { Bucket, Entry, PlacementResult } from '../types.js';
 
 export interface RenderOptions {
   owner: string;
   repo: string;
 }
+
+// Keyed the same way PlacementResult buckets are: a tag name, or null for
+// Unreleased. A repo can fold in from more than one upstream source, so
+// each bucket maps to a list, not a single section.
+export type FoldInsByBucket = Map<string | null, FoldInSection[]>;
 
 const SPECIAL_CHARS = /[\\()[\]_*#]/g;
 
@@ -28,13 +34,26 @@ function authorLink(entry: Entry): string {
 
 function entryUrl(entry: Entry, options: RenderOptions): string {
   const path = entry.kind === 'pr' ? 'pull' : 'issues';
-  return `https://github.com/${options.owner}/${options.repo}/${path}/${entry.number}`;
+  const repo = entry.sourceRepo ?? `${options.owner}/${options.repo}`;
+  return `https://github.com/${repo}/${path}/${entry.number}`;
+}
+
+// A folded-in entry is tagged owner/repo#N (matching GitHub's own
+// cross-repo reference convention) rather than a bare #N — this repo's own
+// issue numbers are unrelated in scale, so an unmarked #2080 next to #941
+// would read as a typo rather than a deliberate cross-repo link.
+function entryLabel(entry: Entry): string {
+  return entry.sourceRepo ? `${entry.sourceRepo}\\#${entry.number}` : `\\#${entry.number}`;
 }
 
 function renderEntry(entry: Entry, options: RenderOptions): string {
   const title = escapeTitle(entry.title);
   const url = entryUrl(entry, options);
-  return `- ${title} [\\#${entry.number}](${url})${authorLink(entry)}`;
+  return `- ${title} [${entryLabel(entry)}](${url})${authorLink(entry)}`;
+}
+
+function withSourceRepo(entry: Entry, repo: string): Entry {
+  return { ...entry, sourceRepo: repo };
 }
 
 interface Section {
@@ -61,7 +80,21 @@ function tagDate(isoDate: string): string {
   return isoDate.slice(0, 10);
 }
 
-function renderBucket(bucket: Bucket, previousTagName: string | undefined, options: RenderOptions): string {
+// A one-line note per upstream source, placed once per bucket rather than
+// repeated per entry — the entries themselves carry the owner/repo#N tag,
+// this just states the absorbed version range for context.
+function foldInNote(foldIn: FoldInSection): string {
+  const [, repoName] = foldIn.repo.split('/');
+  const range = foldIn.fromVersion ? `${foldIn.fromVersion}–${foldIn.toVersion}` : `up to ${foldIn.toVersion}`;
+  return `_Includes ${repoName} ${range}._`;
+}
+
+function renderBucket(
+  bucket: Bucket,
+  previousTagName: string | undefined,
+  options: RenderOptions,
+  foldIns: FoldInSection[],
+): string {
   const repoUrl = `https://github.com/${options.owner}/${options.repo}`;
   const lines: string[] = [];
 
@@ -82,7 +115,15 @@ function renderBucket(bucket: Bucket, previousTagName: string | undefined, optio
     }
   }
 
-  for (const section of sectionsFor(bucket.entries))
+  for (const foldIn of foldIns)
+  {
+    lines.push(foldInNote(foldIn), '');
+  }
+
+  const foldInEntries = foldIns.flatMap((foldIn) => foldIn.entries.map((entry) => withSourceRepo(entry, foldIn.repo)));
+  const allEntries = [...bucket.entries, ...foldInEntries];
+
+  for (const section of sectionsFor(allEntries))
   {
     lines.push(`**${section.heading}:**`, '');
     for (const entry of section.entries)
@@ -95,7 +136,7 @@ function renderBucket(bucket: Bucket, previousTagName: string | undefined, optio
   return lines.join('\n');
 }
 
-export function render(placement: PlacementResult, options: RenderOptions): string {
+export function render(placement: PlacementResult, options: RenderOptions, foldIns: FoldInsByBucket = new Map()): string {
   const lines: string[] = ['# Changelog', ''];
 
   for (let index = 0; index < placement.buckets.length; index += 1)
@@ -103,7 +144,7 @@ export function render(placement: PlacementResult, options: RenderOptions): stri
     const bucket = placement.buckets[index];
     const next = placement.buckets[index + 1];
     const previousTagName = next?.tag?.name;
-    lines.push(renderBucket(bucket, previousTagName, options));
+    lines.push(renderBucket(bucket, previousTagName, options, foldIns.get(bucket.tag?.name ?? null) ?? []));
   }
 
   return `${lines.join('\n').trimEnd()}\n`;

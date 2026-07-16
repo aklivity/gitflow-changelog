@@ -13,6 +13,7 @@ async function main(): Promise<void> {
     cachePath: core.getInput('cache-path') || undefined,
     overridesPath: core.getInput('overrides-path') || undefined,
     configPath: core.getInput('config-path') || undefined,
+    upstreamCacheDir: core.getInput('upstream-cache-dir') || undefined,
     tagPattern: core.getInput('tag-pattern') || undefined,
     enhancementLabels: core.getInput('enhancement-labels') || undefined,
     bugLabels: core.getInput('bug-labels') || undefined,

@@ -10,6 +10,7 @@ export interface RawInputs {
   cachePath?: string;
   overridesPath?: string;
   configPath?: string;
+  upstreamCacheDir?: string;
   tagPattern?: string;
   enhancementLabels?: string;
   bugLabels?: string;
@@ -54,5 +55,7 @@ export async function toRunOptions(raw: RawInputs): Promise<RunOptions> {
     bugLabels: splitLabels(raw.bugLabels, fileConfig['bug-labels'] ?? ['bug']),
     excludeLabels: splitLabels(raw.excludeLabels, fileConfig['exclude-labels'] ?? ['duplicate', 'invalid', 'wontfix']),
     format: raw.format || fileConfig.format || 'default',
+    upstream: fileConfig.upstream ?? [],
+    upstreamCacheDir: raw.upstreamCacheDir ?? '.gitflow-changelog-upstream',
   };
 }
