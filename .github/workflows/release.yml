@@ -57,9 +57,26 @@ jobs:
           git tag -a "v${VERSION}" -m "v${VERSION}"
           git tag -f "$MAJOR" HEAD
 
-          git push origin "v${VERSION}"
+          # A re-run after a partial prior failure re-creates v${VERSION} as a
+          # fresh local tag object (new timestamp/sha) — pushing it again is
+          # rejected as non-fast-forward if an earlier attempt's push already
+          # succeeded. That's fine: the remote tag already points at a valid
+          # release commit, there's nothing left to do for it.
+          git push origin "v${VERSION}" || echo "::warning::v${VERSION} already exists on origin, skipping"
           git push origin -f "$MAJOR"
 
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --generate-notes
+          # gh release create's --generate-notes call hits GitHub's GraphQL
+          # API and can transiently rate-limit independently of whether the
+          # release itself already exists — retry a few times with backoff,
+          # then warn (not fail) rather than take down the whole job over
+          # this cosmetic step. The tag/commit above are what actually
+          # matters; @v0/@v<version> consumers already work regardless of
+          # whether the Release page exists yet.
+          for attempt in 1 2 3; do
+            if gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes; then
+              exit 0
+            fi
+            echo "::warning::gh release create attempt ${attempt} failed for v${VERSION}"
+            sleep $((attempt * 15))
+          done
+          echo "::warning::gh release create did not succeed for v${VERSION} after 3 attempts; tag/commit already pushed — rerun 'gh release create v${VERSION} --generate-notes' manually once available"
