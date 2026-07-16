@@ -109,9 +109,10 @@ describe('readDependencySet and readModuleArtifactIds (filesystem)', () => {
     await mkdir(join(gitDir, 'cloud', 'docker-image'), { recursive: true });
     await writeFile(join(gitDir, 'runtime', 'module-a', 'pom.xml'), moduleAPom(), 'utf8');
     await writeFile(join(gitDir, 'runtime', 'module-c', 'pom.xml'), moduleCPom(), 'utf8');
-    // A bundling pom referencing far more artifacts than any single module
-    // actually depends on — must never be scanned, since runtime/*/pom.xml
-    // is the only glob read.
+    // A bundling pom that ships a module purely by listing it as a
+    // dependency (e.g. a Docker image's pom), never referenced by any of
+    // the repo's own runtime/*/pom.xml files — must still be scanned,
+    // since bundling it in is genuine real usage.
     await writeFile(
       join(gitDir, 'cloud', 'docker-image', 'pom.xml'),
       `<?xml version="1.0"?>
@@ -130,9 +131,29 @@ describe('readDependencySet and readModuleArtifactIds (filesystem)', () => {
     await rm(gitDir, { recursive: true, force: true });
   });
 
-  it('unions dependency artifactIds across every runtime/*/pom.xml, excluding docker-image', async () => {
+  it('unions dependency artifactIds across every pom.xml in the repo, bundling poms included', async () => {
     const dependencySet = await readDependencySet(gitDir, 'com.acme.engine');
-    expect(dependencySet).toEqual(new Set(['module-b', 'engine']));
+    expect(dependencySet).toEqual(new Set(['module-b', 'engine', 'module-x']));
+  });
+
+  it('skips .git, target, and node_modules directories', async () => {
+    await mkdir(join(gitDir, '.git', 'modules'), { recursive: true });
+    await mkdir(join(gitDir, 'runtime', 'module-a', 'target'), { recursive: true });
+    await mkdir(join(gitDir, 'node_modules', 'some-pkg'), { recursive: true });
+    const decoyPom = `<?xml version="1.0"?>
+<project>
+  <artifactId>decoy</artifactId>
+  <dependencies>
+    <dependency><groupId>com.acme.engine</groupId><artifactId>decoy-artifact</artifactId></dependency>
+  </dependencies>
+</project>
+`;
+    await writeFile(join(gitDir, '.git', 'modules', 'pom.xml'), decoyPom, 'utf8');
+    await writeFile(join(gitDir, 'runtime', 'module-a', 'target', 'pom.xml'), decoyPom, 'utf8');
+    await writeFile(join(gitDir, 'node_modules', 'some-pkg', 'pom.xml'), decoyPom, 'utf8');
+
+    const dependencySet = await readDependencySet(gitDir, 'com.acme.engine');
+    expect(dependencySet.has('decoy-artifact')).toBe(false);
   });
 
   it('maps each runtime module directory to its own declared artifactId', async () => {

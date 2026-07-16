@@ -52,28 +52,50 @@ export function readDependencyArtifactIds(pomXml: string, groupId: string): stri
     .filter((artifactId): artifactId is string => artifactId !== undefined);
 }
 
-// The union of `<groupId>:*` artifacts declared across every
-// `runtime/*/pom.xml` in a checkout — deliberately scoped to `runtime/`
-// only, which naturally excludes bundling/packaging poms like
-// cloud/docker-image/pom.xml (those intentionally reference far more than
-// what's actually depended upon, and would defeat the point of narrowing
-// the fold-in feature to real feature dependencies).
-export async function readDependencySet(gitDir: string, groupId: string): Promise<Set<string>> {
-  const runtimeDir = join(gitDir, 'runtime');
-  let moduleNames: string[];
+const SKIP_DIRS = new Set(['.git', 'target', 'node_modules']);
+
+async function findPomFiles(dir: string): Promise<string[]> {
+  let entries;
   try
   {
-    moduleNames = await readdir(runtimeDir);
+    entries = await readdir(dir, { withFileTypes: true });
   }
   catch
   {
-    return new Set();
+    return [];
   }
 
-  const artifactIds = new Set<string>();
-  for (const moduleName of moduleNames)
+  const pomPaths: string[] = [];
+  for (const entry of entries)
   {
-    const pomPath = join(runtimeDir, moduleName, 'pom.xml');
+    if (entry.isDirectory())
+    {
+      if (!SKIP_DIRS.has(entry.name))
+      {
+        pomPaths.push(...await findPomFiles(join(dir, entry.name)));
+      }
+    }
+    else if (entry.name === 'pom.xml')
+    {
+      pomPaths.push(join(dir, entry.name));
+    }
+  }
+  return pomPaths;
+}
+
+// The union of `<groupId>:*` artifacts declared across every pom.xml in a
+// checkout, bundling/packaging poms included — a downstream repo that
+// ships an upstream module purely by bundling it into a packaging pom
+// (e.g. a Docker image's dependency list) rather than through a compile-
+// time dependency in one of its own feature modules still genuinely ships
+// that module, and the fold-in feature needs to recognize that as real
+// usage, not filter it out as unrelated.
+export async function readDependencySet(gitDir: string, groupId: string): Promise<Set<string>> {
+  const pomPaths = await findPomFiles(gitDir);
+
+  const artifactIds = new Set<string>();
+  for (const pomPath of pomPaths)
+  {
     let pomXml: string;
     try
     {
