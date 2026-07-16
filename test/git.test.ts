@@ -55,7 +55,9 @@ describe('cloneOrUpdateRepo', () => {
       const argv = args[1] as string[];
       if (argv.includes('symbolic-ref'))
       {
-        callback(null, { stdout: 'develop\n', stderr: '' });
+        // Real git output: only the refs/remotes/ prefix is stripped, the
+        // remote name stays — "origin/develop", not "develop".
+        callback(null, { stdout: 'origin/develop\n', stderr: '' });
         return;
       }
       callback(null, { stdout: '', stderr: '' });
