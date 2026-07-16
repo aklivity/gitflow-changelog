@@ -1,6 +1,6 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
-import type { GitOptions } from './git.js';
-import { isAncestor, showFile } from './git.js';
+import type { GitOptions, TagInfo } from './git.js';
+import { listTags, showFile, tagsContaining } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import { moduleDirFromPath, readDependencyVersion } from './maven.js';
@@ -74,35 +74,83 @@ export async function computeVersionRanges(
   return ranges;
 }
 
-// Entries reachable from toVersion but not from fromVersion, resolved by
-// direct git ancestry against the literal ref strings a consumer's build
-// file pins — not by looking them up as bucket names in a tagPattern-scoped
-// placement. A consumer has no obligation to only ever pin versions that
-// look like upstream's idea of a "real" release (e.g. tracking upstream's
-// own develop line via an alpha/rc version); as long as the pinned string
-// resolves to a real commit in upstream's history, ancestry alone is
-// enough to bound "what shipped in this exact dependency bump," regardless
-// of how upstream chooses to section its own rendered changelog.
-export async function selectEntriesByVersionRange(
-  entries: Entry[],
-  fromVersion: string | undefined,
-  toVersion: string,
-  gitOptions: GitOptions,
-): Promise<Entry[]> {
-  const selected: Entry[] = [];
+export interface UpstreamPlacement {
+  // Every upstream tag, oldest first — no pattern or reachability filtering
+  // (see placeUpstreamGlobally for why).
+  tagsByDateAsc: TagInfo[];
+  // Keyed by tag name: the entries first shipped in that tag (the earliest
+  // tag, by date, whose history contains the entry's commit).
+  entriesByTag: Map<string, Entry[]>;
+}
+
+// Places every upstream entry exactly once per run, globally — not once per
+// consumer version range. This intentionally skips both filters place() (see
+// placement.ts) applies for a repo's own rendered changelog:
+//
+// - No tag-pattern restriction: place()'s tagPattern decides which tags earn
+//   their own heading in a *rendered* changelog. This structure is never
+//   rendered directly — it's purely a lookup table for slicing fold-in
+//   ranges — so there's no reason to exclude any tag as a candidate
+//   boundary. A consumer's pinned dependency version (e.g. an upstream
+//   alpha/rc build like "2.0.0-alpha-22") has no obligation to satisfy
+//   upstream's own rendering pattern, and now doesn't need to.
+// - No ref-reachability restriction: place() also scopes tags to
+//   `reachableFrom(ref)`, which is what excludes a commit-only-on-a-
+//   maintenance-branch backport unless placement is specifically re-scoped
+//   to that branch's tag (the bug fixed by fold-in placement scoping to the
+//   pinned tag itself, historically). `git tag --contains <sha>` is already
+//   branch-agnostic — it answers "is this commit an ancestor of that tag,
+//   on any line of history" — so picking the globally-earliest-by-date
+//   containing tag for each entry already finds cross-branch content
+//   correctly, with no per-branch or per-pinned-tag rescoping needed.
+//
+// Cost is O(upstream entries) — one `tagsContaining` call per entry — for
+// the whole run, computed once and reused for every consumer version range,
+// instead of a fresh full placement (or a fresh per-entry ancestry check)
+// for every single range.
+export async function placeUpstreamGlobally(entries: Entry[], gitOptions: GitOptions): Promise<UpstreamPlacement> {
+  const tagsByDateAsc = (await listTags(/.*/, gitOptions)).sort((a, b) => a.date.localeCompare(b.date));
+
+  const entriesByTag = new Map<string, Entry[]>();
   for (const entry of entries)
   {
-    if (!(await isAncestor(entry.sha, toVersion, gitOptions)))
+    const containing = new Set(await tagsContaining(entry.sha, gitOptions));
+    const firstTag = tagsByDateAsc.find((tag) => containing.has(tag.name));
+    if (firstTag === undefined)
     {
       continue;
     }
-    if (fromVersion && (await isAncestor(entry.sha, fromVersion, gitOptions)))
-    {
-      continue;
-    }
-    selected.push(entry);
+    const bucket = entriesByTag.get(firstTag.name) ?? [];
+    bucket.push(entry);
+    entriesByTag.set(firstTag.name, bucket);
   }
-  return selected;
+
+  return { tagsByDateAsc, entriesByTag };
+}
+
+// Slices the entries strictly after fromVersion (exclusive) and up to and
+// including toVersion out of an already-computed UpstreamPlacement — pure
+// index arithmetic against the precomputed tag/entry map, no git calls.
+// Newest-tag-first within the range, matching the order a rendered fold-in
+// section expects.
+export function selectEntriesInRange(
+  placement: UpstreamPlacement,
+  fromVersion: string | undefined,
+  toVersion: string,
+): Entry[] {
+  const toIndex = placement.tagsByDateAsc.findIndex((tag) => tag.name === toVersion);
+  if (toIndex === -1)
+  {
+    return [];
+  }
+  const fromIndex = fromVersion ? placement.tagsByDateAsc.findIndex((tag) => tag.name === fromVersion) : -1;
+
+  const entries: Entry[] = [];
+  for (let index = toIndex; index > fromIndex; index -= 1)
+  {
+    entries.push(...(placement.entriesByTag.get(placement.tagsByDateAsc[index].name) ?? []));
+  }
+  return entries;
 }
 
 export interface FoldInFilterOptions {
@@ -251,14 +299,16 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
   );
 
   const sections = new Map<string | null, FoldInSection>();
+  if (ranges.length === 0)
+  {
+    return sections;
+  }
+
+  const upstreamPlacement = await placeUpstreamGlobally(options.upstreamEntries, options.upstreamGitOptions);
+
   for (const range of ranges)
   {
-    const candidates = await selectEntriesByVersionRange(
-      options.upstreamEntries,
-      range.fromVersion,
-      range.toVersion,
-      options.upstreamGitOptions,
-    );
+    const candidates = selectEntriesInRange(upstreamPlacement, range.fromVersion, range.toVersion);
     const entries = await filterForFoldIn(candidates, {
       level: options.upstream.classification,
       owner: upstreamOwner,

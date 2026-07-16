@@ -84,8 +84,8 @@ function withFoldInOnlyBuckets(placement: Awaited<ReturnType<typeof place>>, fol
 // via actions/cache) so a full history transfer only happens once, not on
 // every single run. Reads the upstream's own .gitflow-changelog.yml so its
 // label categorization stays owned by that repo, same as any direct run
-// against it would use — fold-in itself resolves pinned versions by direct
-// ancestry (selectEntriesByVersionRange), independent of any tag pattern.
+// against it would use — fold-in itself places upstream entries globally,
+// unscoped by any tag pattern (see placeUpstreamGlobally in upstream.ts).
 async function computeUpstreamFoldIn(
   upstream: UpstreamConfig,
   ownPlacement: Awaited<ReturnType<typeof place>>,
