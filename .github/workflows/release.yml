@@ -72,11 +72,23 @@ jobs:
           # this cosmetic step. The tag/commit above are what actually
           # matters; @v0/@v<version> consumers already work regardless of
           # whether the Release page exists yet.
+          last_error=""
           for attempt in 1 2 3; do
-            if gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes; then
+            if last_error=$(gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes 2>&1); then
               exit 0
             fi
-            echo "::warning::gh release create attempt ${attempt} failed for v${VERSION}"
+            echo "::warning::gh release create attempt ${attempt} failed for v${VERSION}: ${last_error//$'\n'/ }"
             sleep $((attempt * 15))
           done
-          echo "::warning::gh release create did not succeed for v${VERSION} after 3 attempts; tag/commit already pushed — rerun 'gh release create v${VERSION} --generate-notes' manually once available"
+
+          # gh api rate_limit is exempt from the very limits it reports, so
+          # this is safe to call even when graphql itself is exhausted — best
+          # effort, since the failure above might not even be a rate limit.
+          reset_hint=""
+          reset_epoch=$(gh api rate_limit --jq '.resources.graphql.reset' 2>/dev/null || true)
+          if [ -n "$reset_epoch" ]; then
+            reset_human=$(date -u -d "@${reset_epoch}" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "$reset_epoch")
+            reset_hint=" GraphQL quota resets at ${reset_human}."
+          fi
+
+          echo "::warning::gh release create did not succeed for v${VERSION} after 3 attempts (last error: ${last_error//$'\n'/ }).${reset_hint} Tag/commit already pushed — repair with: gh release create v${VERSION} --title v${VERSION} --generate-notes"
