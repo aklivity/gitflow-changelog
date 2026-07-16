@@ -186,6 +186,59 @@ describe('filterForFoldIn', () => {
 
     expect(entries.map((e) => e.number)).toEqual([1]);
   });
+
+  it('skips fetching a PR whose files are already in prFilesCache', async () => {
+    const fetchSpy = vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
+      if (number === 2) return ['runtime/module-a/src/main/java/Foo.java'];
+      throw new Error(`unexpected fetch for #${number}`);
+    });
+
+    const entries = await filterForFoldIn([pr(1), pr(2)], {
+      level: 'path',
+      owner: 'acme',
+      repo: 'engine',
+      token: 't',
+      prFilesCache: { 1: ['runtime/module-a/src/main/java/Foo.java'] },
+    });
+
+    expect(entries.map((e) => e.number)).toEqual([1, 2]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith('acme', 'engine', 2, 't');
+  });
+
+  it('populates prFilesCache with newly fetched file lists', async () => {
+    vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => [`runtime/module-a/src/main-${number}.java`]);
+
+    const cache: Record<string, string[]> = {};
+    await filterForFoldIn([pr(1), pr(2)], {
+      level: 'path',
+      owner: 'acme',
+      repo: 'engine',
+      token: 't',
+      prFilesCache: cache,
+    });
+
+    expect(cache).toEqual({
+      1: ['runtime/module-a/src/main-1.java'],
+      2: ['runtime/module-a/src/main-2.java'],
+    });
+  });
+
+  it('fetches every uncached PR exactly once even with concurrency', async () => {
+    const fetchSpy = vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => [`runtime/module-a/src/main/java/Foo${number}.java`]);
+
+    const prs = Array.from({ length: 20 }, (_, index) => pr(index + 1));
+    const entries = await filterForFoldIn(prs, {
+      level: 'path',
+      owner: 'acme',
+      repo: 'engine',
+      token: 't',
+    });
+
+    expect(entries.map((e) => e.number)).toEqual(prs.map((p) => p.number));
+    expect(fetchSpy).toHaveBeenCalledTimes(20);
+    prs.forEach((p) => expect(fetchSpy).toHaveBeenCalledWith('acme', 'engine', p.number, 't'));
+  });
 });
 
 describe('computeFoldIn', () => {

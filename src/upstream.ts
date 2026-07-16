@@ -112,6 +112,63 @@ export interface FoldInFilterOptions {
   patterns?: ClassificationPatterns;
   dependencySet?: Set<string>;
   moduleArtifactIds?: Map<string, string>;
+  // Keyed by PR number, shared with the caller (mutated in place) so a
+  // fetched file list survives beyond this call — a merged PR's files never
+  // change, so once fetched a number never needs fetching again.
+  prFilesCache?: Record<string, string[]>;
+}
+
+const FETCH_CONCURRENCY = 8;
+
+// Runs `fn` over `items` with at most `limit` calls in flight at once,
+// preserving no particular order beyond "every item gets processed" — the
+// caller only needs completion, not a returned array, so this is void.
+async function forEachWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length)
+    {
+      const item = items[next];
+      next += 1;
+      await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+// Resolves every PR's file list once, before any classification logic runs —
+// cache hits are free, cache misses are fetched with bounded concurrency
+// instead of one-at-a-time. Separated from filterForFoldIn so the
+// classification pass below stays a plain synchronous loop.
+async function resolvePullRequestFiles(
+  pullRequests: Entry[],
+  options: FoldInFilterOptions,
+): Promise<Map<number, string[]>> {
+  const resolved = new Map<number, string[]>();
+  const toFetch: Entry[] = [];
+  for (const entry of pullRequests)
+  {
+    const cached = options.prFilesCache?.[String(entry.number)];
+    if (cached)
+    {
+      resolved.set(entry.number, cached);
+    }
+    else
+    {
+      toFetch.push(entry);
+    }
+  }
+
+  await forEachWithConcurrency(toFetch, FETCH_CONCURRENCY, async (entry) => {
+    const paths = await fetchPullRequestFiles(options.owner, options.repo, entry.number, options.token);
+    resolved.set(entry.number, paths);
+    if (options.prFilesCache)
+    {
+      options.prFilesCache[String(entry.number)] = paths;
+    }
+  });
+
+  return resolved;
 }
 
 // Only pull requests carry a diff to classify — issues have no file list
@@ -126,10 +183,12 @@ export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOpt
     return pullRequests;
   }
 
+  const pathsByNumber = await resolvePullRequestFiles(pullRequests, options);
+
   const filtered: Entry[] = [];
   for (const entry of pullRequests)
   {
-    const paths = await fetchPullRequestFiles(options.owner, options.repo, entry.number, options.token);
+    const paths = pathsByNumber.get(entry.number) ?? [];
     const classification = classifyPaths(paths, options.patterns ?? DEFAULT_CLASSIFICATION_PATTERNS);
     if (classification !== 'feature')
     {
@@ -175,6 +234,7 @@ export interface ComputeFoldInOptions {
   moduleArtifactIds?: Map<string, string>;
   token: string;
   patterns?: ClassificationPatterns;
+  prFilesCache?: Record<string, string[]>;
 }
 
 // Places the upstream repo's own entries scoped to a specific pinned
@@ -240,6 +300,7 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
       patterns: options.patterns,
       dependencySet: options.dependencySet,
       moduleArtifactIds: options.moduleArtifactIds,
+      prFilesCache: options.prFilesCache,
     });
     if (entries.length > 0)
     {

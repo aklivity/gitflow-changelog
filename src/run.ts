@@ -109,7 +109,6 @@ async function computeUpstreamFoldIn(
 
   const upstreamDriver = new GithubDriver(upstreamCache);
   const upstreamEntries = await upstreamDriver.fetchEntries(upstreamDriverOptions);
-  await saveCache(upstreamCachePath, upstreamCache);
 
   const { resolved: upstreamResolved } = await resolveHashes(
     { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD' },
@@ -123,7 +122,7 @@ async function computeUpstreamFoldIn(
     ? await readModuleArtifactIds(upstreamDir)
     : undefined;
 
-  return await computeFoldIn({
+  const sections = await computeFoldIn({
     upstream,
     placement: ownPlacement,
     upstreamEntries: upstreamResolved,
@@ -134,8 +133,15 @@ async function computeUpstreamFoldIn(
     gitOptions: { cwd: options.gitDir },
     dependencySet,
     moduleArtifactIds,
+    prFilesCache: upstreamCache.prFiles,
     token: options.token,
   });
+
+  // Saved after computeFoldIn, not right after fetchEntries — filterForFoldIn
+  // mutates upstreamCache.prFiles in place as it fetches, and those newly
+  // cached file lists need to make it into the persisted cache too.
+  await saveCache(upstreamCachePath, upstreamCache);
+  return sections;
 }
 
 export async function run(options: RunOptions): Promise<RunResult> {
