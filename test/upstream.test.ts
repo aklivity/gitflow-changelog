@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as githubDriver from '../src/drivers/github.js';
+import * as gitModule from '../src/git.js';
 import type { Entry, PlacementResult, Tag } from '../src/types.js';
 import {
   computeFoldIn,
   computeVersionRanges,
   filterForFoldIn,
+  placeUpstreamGlobally,
   readVersionAtRef,
-  selectEntriesByVersionRange,
+  selectEntriesInRange,
 } from '../src/upstream.js';
 import { createGitFixture, type GitFixture } from './git-fixture.js';
 
@@ -26,7 +28,7 @@ function placementWithBuckets(buckets: PlacementResult['buckets']): PlacementRes
   return { buckets, dropped: [], unresolved: [], allTags: buckets.map((b) => b.tag).filter((t): t is Tag => t !== null) };
 }
 
-describe('selectEntriesByVersionRange', () => {
+describe('placeUpstreamGlobally and selectEntriesInRange', () => {
   let fixture: GitFixture;
 
   beforeEach(async () => {
@@ -35,6 +37,7 @@ describe('selectEntriesByVersionRange', () => {
 
   afterEach(async () => {
     await fixture.cleanup();
+    vi.restoreAllMocks();
   });
 
   it('selects entries strictly after fromVersion up to and including toVersion', async () => {
@@ -45,14 +48,12 @@ describe('selectEntriesByVersionRange', () => {
     const shaAt300 = await fixture.commit('feature 300');
     await fixture.tag('1.2.6', '2024-03-01T00:00:00Z');
 
-    const entries = await selectEntriesByVersionRange(
+    const placement = await placeUpstreamGlobally(
       [pr(100, shaAt100), pr(200, shaAt200), pr(300, shaAt300)],
-      '1.2.4',
-      '1.2.6',
       { cwd: fixture.dir },
     );
 
-    expect(entries.map((e) => e.number)).toEqual([200, 300]);
+    expect(selectEntriesInRange(placement, '1.2.4', '1.2.6').map((e) => e.number)).toEqual([300, 200]);
   });
 
   it('selects everything up to toVersion when fromVersion is undefined (first release)', async () => {
@@ -61,14 +62,9 @@ describe('selectEntriesByVersionRange', () => {
     const shaAt200 = await fixture.commit('feature 200');
     await fixture.tag('1.2.5', '2024-02-01T00:00:00Z');
 
-    const entries = await selectEntriesByVersionRange(
-      [pr(100, shaAt100), pr(200, shaAt200)],
-      undefined,
-      '1.2.5',
-      { cwd: fixture.dir },
-    );
+    const placement = await placeUpstreamGlobally([pr(100, shaAt100), pr(200, shaAt200)], { cwd: fixture.dir });
 
-    expect(entries.map((e) => e.number)).toEqual([100, 200]);
+    expect(selectEntriesInRange(placement, undefined, '1.2.5').map((e) => e.number)).toEqual([200, 100]);
   });
 
   it('excludes an entry not reachable from toVersion at all (a different, unrelated line of history)', async () => {
@@ -78,34 +74,67 @@ describe('selectEntriesByVersionRange', () => {
     await fixture.checkout('other');
     const shaOffBranch = await fixture.commit('unrelated branch work');
 
-    const entries = await selectEntriesByVersionRange(
-      [pr(100, shaOnMain), pr(200, shaOffBranch)],
-      undefined,
-      '1.2.4',
-      { cwd: fixture.dir },
-    );
+    const placement = await placeUpstreamGlobally([pr(100, shaOnMain), pr(200, shaOffBranch)], { cwd: fixture.dir });
 
-    expect(entries.map((e) => e.number)).toEqual([100]);
+    expect(selectEntriesInRange(placement, undefined, '1.2.4').map((e) => e.number)).toEqual([100]);
   });
 
-  // The actual bug this guards against: a consumer's pom.xml can pin a
+  // The actual bug this guards against (#10): a consumer's pom.xml can pin a
   // version that is a real, resolvable ref but doesn't look like a "real"
   // release to upstream's own tag-pattern (e.g. tracking upstream's develop
   // line via an alpha build) — resolution must not depend on that pattern.
-  it('resolves toVersion by ancestry even when it would never match a strict semver tag pattern', async () => {
+  // placeUpstreamGlobally never applies a tag pattern at all.
+  it('finds an entry under a tag that would never match a strict semver tag pattern', async () => {
     const shaAt1 = await fixture.commit('feature 1');
     await fixture.tag('1.0.0', '2024-01-01T00:00:00Z');
     const shaAt2 = await fixture.commit('feature 2');
     await fixture.tag('2.0.0-alpha-22', '2024-02-01T00:00:00Z');
 
-    const entries = await selectEntriesByVersionRange(
-      [pr(1, shaAt1), pr(2, shaAt2)],
-      '1.0.0',
-      '2.0.0-alpha-22',
-      { cwd: fixture.dir },
-    );
+    const placement = await placeUpstreamGlobally([pr(1, shaAt1), pr(2, shaAt2)], { cwd: fixture.dir });
 
-    expect(entries.map((e) => e.number)).toEqual([2]);
+    expect(selectEntriesInRange(placement, '1.0.0', '2.0.0-alpha-22').map((e) => e.number)).toEqual([2]);
+  });
+
+  // The bug #7 originally fixed, now solved without any per-tag rescoping:
+  // a backport-only commit that never lands on the branch a tag's sibling
+  // release came from is still found, because `git tag --contains` is
+  // inherently branch-agnostic — no ref scoping is involved at all.
+  it('finds a commit under the earliest tag containing it regardless of which branch produced that tag', async () => {
+    const shaAt1990 = await fixture.commit('fix 1990');
+    await fixture.branch('support/1.x');
+    await fixture.checkout('support/1.x');
+    await fixture.tag('1.2.5', '2024-01-01T00:00:00Z');
+    const shaAt2080 = await fixture.commit('backport 2080');
+    await fixture.tag('1.2.6', '2024-02-01T00:00:00Z');
+
+    const placement = await placeUpstreamGlobally([pr(1990, shaAt1990), pr(2080, shaAt2080)], { cwd: fixture.dir });
+
+    expect(selectEntriesInRange(placement, '1.2.5', '1.2.6').map((e) => e.number)).toEqual([2080]);
+    expect(selectEntriesInRange(placement, undefined, '1.2.5').map((e) => e.number)).toEqual([1990]);
+  });
+
+  // The actual performance fix: placement is computed once, up front — not
+  // once per version range. Slicing additional ranges out of an
+  // already-computed placement makes no further git calls at all.
+  it('computes placement with one tagsContaining call per entry, then slices ranges with zero further git calls', async () => {
+    const shaAt100 = await fixture.commit('feature 100');
+    await fixture.tag('1.2.4', '2024-01-01T00:00:00Z');
+    const shaAt200 = await fixture.commit('feature 200');
+    await fixture.tag('1.2.5', '2024-02-01T00:00:00Z');
+    const shaAt300 = await fixture.commit('feature 300');
+    await fixture.tag('1.2.6', '2024-03-01T00:00:00Z');
+
+    const spy = vi.spyOn(gitModule, 'tagsContaining');
+    const entries = [pr(100, shaAt100), pr(200, shaAt200), pr(300, shaAt300)];
+    const placement = await placeUpstreamGlobally(entries, { cwd: fixture.dir });
+
+    expect(spy).toHaveBeenCalledTimes(entries.length);
+
+    selectEntriesInRange(placement, '1.2.4', '1.2.6');
+    selectEntriesInRange(placement, undefined, '1.2.4');
+    selectEntriesInRange(placement, '1.2.5', '1.2.6');
+
+    expect(spy).toHaveBeenCalledTimes(entries.length);
   });
 });
 
