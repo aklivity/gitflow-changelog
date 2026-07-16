@@ -1,9 +1,10 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
 import type { GitOptions, TagInfo } from './git.js';
 import { listTags, showFile, tagsContaining } from './git.js';
-import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS } from './classification.js';
+import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
-import { moduleDirFromPath, readDependencyVersion } from './maven.js';
+import type { MavenModule } from './maven.js';
+import { readDependencyVersion, resolveModule } from './maven.js';
 import type { ClassificationLevel, Entry, PlacementResult, Tag, UpstreamConfig } from './types.js';
 
 export interface VersionRange {
@@ -159,8 +160,10 @@ export interface FoldInFilterOptions {
   repo: string;
   token: string;
   patterns?: ClassificationPatterns;
+  // Already the full transitive closure — see expandTransitiveDependencySet
+  // in maven.ts. Callers compute this once per run, not per entry.
   dependencySet?: Set<string>;
-  moduleArtifactIds?: Map<string, string>;
+  modules?: MavenModule[];
   // Keyed by PR number, shared with the caller (mutated in place) so a
   // fetched file list survives beyond this call — a merged PR's files never
   // change, so once fetched a number never needs fetching again.
@@ -234,11 +237,20 @@ export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOpt
 
   const pathsByNumber = await resolvePullRequestFiles(pullRequests, options);
 
+  // An explicit override always wins. Otherwise, whenever a Maven module
+  // index is available (any 'maven'-classified upstream) it's strictly more
+  // precise than the hardcoded default — derived from the upstream's own
+  // pom.xml layout instead of a guessed directory convention — so prefer
+  // it; fall back to the hardcoded default only when there's no module
+  // index at all (a 'path'-level or non-Maven upstream).
+  const patterns = options.patterns
+    ?? (options.modules ? { featurePaths: featurePathsFromModules(options.modules), testPaths: DEFAULT_CLASSIFICATION_PATTERNS.testPaths } : DEFAULT_CLASSIFICATION_PATTERNS);
+
   const filtered: Entry[] = [];
   for (const entry of pullRequests)
   {
     const paths = pathsByNumber.get(entry.number) ?? [];
-    const classification = classifyPaths(paths, options.patterns ?? DEFAULT_CLASSIFICATION_PATTERNS);
+    const classification = classifyPaths(paths, patterns);
     if (classification !== 'feature')
     {
       continue;
@@ -251,9 +263,8 @@ export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOpt
     }
 
     const touchesDependency = paths.some((path) => {
-      const moduleDir = moduleDirFromPath(path);
-      const artifactId = moduleDir ? options.moduleArtifactIds?.get(moduleDir) : undefined;
-      return artifactId !== undefined && (options.dependencySet?.has(artifactId) ?? false);
+      const module = options.modules ? resolveModule(path, options.modules) : undefined;
+      return module !== undefined && (options.dependencySet?.has(module.artifactId) ?? false);
     });
     if (touchesDependency)
     {
@@ -279,7 +290,7 @@ export interface ComputeFoldInOptions {
   gitDir: string;
   gitOptions: GitOptions;
   dependencySet?: Set<string>;
-  moduleArtifactIds?: Map<string, string>;
+  modules?: MavenModule[];
   token: string;
   patterns?: ClassificationPatterns;
   prFilesCache?: Record<string, string[]>;
@@ -316,7 +327,7 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
       token: options.token,
       patterns: options.patterns,
       dependencySet: options.dependencySet,
-      moduleArtifactIds: options.moduleArtifactIds,
+      modules: options.modules,
       prFilesCache: options.prFilesCache,
     });
     if (entries.length > 0)

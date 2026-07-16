@@ -1,5 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 
 const parser = new XMLParser();
@@ -7,6 +7,7 @@ const parser = new XMLParser();
 interface PomDependency {
   groupId?: string;
   artifactId?: string;
+  scope?: string;
 }
 
 interface PomProject {
@@ -42,14 +43,38 @@ export function readModuleArtifactId(pomXml: string): string | undefined {
   return parsePom(pomXml).artifactId;
 }
 
+export interface DependencyEdge {
+  artifactId: string;
+  // Defaults to 'compile' when unspecified, matching Maven's own default.
+  scope: string;
+}
+
+// A dependency scoped 'test' or 'system' is never pulled in by whatever
+// depends on the declaring module — Maven doesn't resolve it onto that
+// consumer's classpath, so neither should this analysis. Every other scope
+// (compile, runtime, provided, and plain unscoped/default) represents a
+// real, resolved dependency of the declaring module itself; the further
+// question of whether that dependency also propagates on to the declaring
+// module's own consumers is a separate, narrower rule — see
+// expandTransitiveDependencySet.
+const EXCLUDED_SCOPES = new Set(['test', 'system']);
+
+// Every same-groupId dependency edge a pom.xml declares, with scope
+// resolved to Maven's own default ('compile') when the <scope> element is
+// absent. Test/system-scoped dependencies are dropped here, at the source,
+// so no caller needs to re-derive that exclusion itself.
+export function readDependencyEdges(pomXml: string, groupId: string): DependencyEdge[] {
+  return asList(parsePom(pomXml).dependencies?.dependency)
+    .filter((dependency) => dependency.groupId === groupId && dependency.artifactId !== undefined)
+    .map((dependency) => ({ artifactId: dependency.artifactId as string, scope: dependency.scope ?? 'compile' }))
+    .filter((edge) => !EXCLUDED_SCOPES.has(edge.scope));
+}
+
 // Every artifactId this pom declares a dependency on under the given
 // groupId, e.g. every io.aklivity.zilla:* artifact a runtime module
 // actually builds against.
 export function readDependencyArtifactIds(pomXml: string, groupId: string): string[] {
-  return asList(parsePom(pomXml).dependencies?.dependency)
-    .filter((dependency) => dependency.groupId === groupId)
-    .map((dependency) => dependency.artifactId)
-    .filter((artifactId): artifactId is string => artifactId !== undefined);
+  return readDependencyEdges(pomXml, groupId).map((edge) => edge.artifactId);
 }
 
 const SKIP_DIRS = new Set(['.git', 'target', 'node_modules']);
@@ -113,25 +138,28 @@ export async function readDependencySet(gitDir: string, groupId: string): Promis
   return artifactIds;
 }
 
-// Maps each `runtime/<dir>/pom.xml` to that module's own declared
-// artifactId, for translating a changed file path back to the artifact it
-// belongs to.
-export async function readModuleArtifactIds(gitDir: string): Promise<Map<string, string>> {
-  const runtimeDir = join(gitDir, 'runtime');
-  let moduleNames: string[];
-  try
-  {
-    moduleNames = await readdir(runtimeDir);
-  }
-  catch
-  {
-    return new Map();
-  }
+export interface MavenModule {
+  // Relative to the checkout root, POSIX-separated (e.g. "runtime/binding-tcp"
+  // or "manager" for a top-level module) — never assumes any particular
+  // parent directory, so a module living outside runtime/ is discovered
+  // exactly the same way as one inside it.
+  dir: string;
+  artifactId: string;
+  // This module's own same-groupId dependency edges, for walking the
+  // upstream's internal module graph — see expandTransitiveDependencySet.
+  dependencies: DependencyEdge[];
+}
 
-  const artifactIdsByDir = new Map<string, string>();
-  for (const moduleName of moduleNames)
+// Indexes every Maven module in a checkout — real module discovery from
+// wherever a pom.xml actually sits, not a guessed directory convention like
+// "one level under runtime/". Reuses the same unrestricted tree walk
+// readDependencySet already relies on.
+export async function indexMavenModules(gitDir: string, groupId: string): Promise<MavenModule[]> {
+  const pomPaths = await findPomFiles(gitDir);
+
+  const modules: MavenModule[] = [];
+  for (const pomPath of pomPaths)
   {
-    const pomPath = join(runtimeDir, moduleName, 'pom.xml');
     let pomXml: string;
     try
     {
@@ -142,23 +170,72 @@ export async function readModuleArtifactIds(gitDir: string): Promise<Map<string,
       continue;
     }
     const artifactId = readModuleArtifactId(pomXml);
-    if (artifactId)
+    if (artifactId === undefined)
     {
-      artifactIdsByDir.set(moduleName, artifactId);
+      continue;
     }
+    const dir = relative(gitDir, dirname(pomPath)).split(sep).join('/');
+    modules.push({ dir, artifactId, dependencies: readDependencyEdges(pomXml, groupId) });
   }
-  return artifactIdsByDir;
+  return modules;
 }
 
-// The runtime/<dir> a changed path belongs to, or undefined if the path
-// isn't under runtime/ at all.
-export function moduleDirFromPath(path: string): string | undefined {
-  const prefix = 'runtime/';
-  if (!path.startsWith(prefix))
+// Resolves a changed file path to the Maven module that owns it — the
+// indexed module whose own directory is the longest (most specific)
+// matching prefix of the path, i.e. actual nearest-enclosing-module
+// ownership rather than a hardcoded layout assumption. A module at the
+// checkout root (dir === '') matches every path, so it only ever wins when
+// nothing more specific does.
+export function resolveModule(path: string, modules: MavenModule[]): MavenModule | undefined {
+  let best: MavenModule | undefined;
+  for (const module of modules)
   {
-    return undefined;
+    const prefix = module.dir ? `${module.dir}/` : '';
+    if (path.startsWith(prefix) && (best === undefined || module.dir.length > best.dir.length))
+    {
+      best = module;
+    }
   }
-  const rest = path.slice(prefix.length);
-  const slash = rest.indexOf('/');
-  return slash === -1 ? rest : rest.slice(0, slash);
+  return best;
+}
+
+// A dependency scoped 'provided' (or 'test'/'system', already excluded from
+// DependencyEdge entirely) is resolved for the declaring module itself but
+// never propagates on to whatever depends on that module — this is Maven's
+// own documented scope-transitivity rule, not a heuristic. Only 'compile'
+// and 'runtime' edges carry a dependency's relevance forward transitively.
+const PROPAGATING_SCOPES = new Set(['compile', 'runtime']);
+
+// Expands a downstream repo's directly-declared upstream artifactIds to
+// their full transitive closure, using the upstream's own internal module
+// graph: if the downstream depends on module A, and A depends on module B
+// via a propagating (compile/runtime) edge, a change to B is exactly as
+// relevant as a change to A. A provided-scoped edge (e.g. a runtime module's
+// reference to its own codegen-only .spec sibling) stops the walk there,
+// matching Maven's real transitivity semantics with no naming convention or
+// build-plugin awareness required.
+export function expandTransitiveDependencySet(direct: Set<string>, modules: MavenModule[]): Set<string> {
+  const byArtifactId = new Map(modules.map((module) => [module.artifactId, module]));
+  const result = new Set(direct);
+  const queue = [...direct];
+
+  while (queue.length > 0)
+  {
+    const artifactId = queue.shift() as string;
+    const module = byArtifactId.get(artifactId);
+    if (module === undefined)
+    {
+      continue;
+    }
+    for (const edge of module.dependencies)
+    {
+      if (!PROPAGATING_SCOPES.has(edge.scope) || result.has(edge.artifactId))
+      {
+        continue;
+      }
+      result.add(edge.artifactId);
+      queue.push(edge.artifactId);
+    }
+  }
+  return result;
 }
