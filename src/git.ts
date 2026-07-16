@@ -79,9 +79,20 @@ export async function showFile(ref: string, path: string, options: GitOptions): 
 // complete tag and ancestry history, not just its recent commits. Auth is
 // embedded in the URL rather than passed as a separate git-credential step
 // since this clone is throwaway and never persisted.
+//
+// `-c credential.helper=` disables credential-helper interaction for this
+// one invocation. Without it, a caller running inside a job that already
+// has `credential.helper store` configured globally (a common pattern for
+// authenticating a separate git push elsewhere in the same job, e.g. a
+// release workflow pushing with a dedicated PAT) would have this clone's
+// URL-embedded token silently persisted into that same shared credential
+// store on success — git's "store" helper caches *any* credential it sees
+// succeed, not just ones it was asked to look up. Since both credentials
+// share the `github.com` host key, that overwrites the caller's own token
+// with this one, corrupting unrelated git operations later in the same job.
 export async function cloneRepo(owner: string, repo: string, dir: string, token: string): Promise<void> {
   const url = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
-  await execFileAsync('git', ['clone', '--quiet', url, dir]);
+  await execFileAsync('git', ['-c', 'credential.helper=', 'clone', '--quiet', url, dir]);
 }
 
 export async function searchCommitsReferencing(
