@@ -15,6 +15,7 @@ interface GithubIssueOrPr {
   user: GithubUser;
   labels: Array<{ name: string }>;
   pull_request?: { merged_at: string | null };
+  body?: string | null;
 }
 
 interface GithubIssueEvent {
@@ -151,6 +152,41 @@ export function applyEvent(cache: CacheFile, event: GithubIssueEvent): void {
   cache.lastEventId = Math.max(cache.lastEventId, event.id);
 }
 
+const CLOSING_KEYWORDS = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)/gi;
+
+function extractClosingReferences(body: string | null | undefined): number[] {
+  if (!body)
+  {
+    return [];
+  }
+  return [...body.matchAll(CLOSING_KEYWORDS)].map((match) => Number(match[1]));
+}
+
+// The repo-wide /issues/events "closed" event only carries a commit_id when
+// an issue is closed by a direct commit reference. An issue auto-closed by
+// a merged pull request's closing keyword — the common case in a PR-driven
+// repo — gets a "closed" event with commit_id: null, so without this it
+// never resolves to a placeable sha and silently drops out of the
+// changelog. Backfill from the merging PR's own commit_id instead.
+export function applyClosingReferences(cache: CacheFile, events: GithubIssueEvent[]): void {
+  for (const event of events)
+  {
+    const isPr = event.issue.pull_request !== undefined;
+    if (event.event !== 'merged' || !isPr || !event.commit_id)
+    {
+      continue;
+    }
+    for (const closedNumber of extractClosingReferences(event.issue.body))
+    {
+      const closedEntry = cache.entries[String(closedNumber)];
+      if (closedEntry && closedEntry.kind === 'issue' && !closedEntry.sha)
+      {
+        closedEntry.sha = event.commit_id;
+      }
+    }
+  }
+}
+
 function categorize(labels: string[], options: DriverOptions): Category {
   if (labels.some((label) => options.excludeLabels.includes(label)))
   {
@@ -202,6 +238,7 @@ export async function updateCache(
   {
     applyEvent(cache, event);
   }
+  applyClosingReferences(cache, events);
   return cache;
 }
 
