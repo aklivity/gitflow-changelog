@@ -190,13 +190,16 @@ describe('filterForFoldIn', () => {
 
 describe('computeFoldIn', () => {
   let fixture: GitFixture;
+  let upstreamFixture: GitFixture;
 
   beforeEach(async () => {
     fixture = await createGitFixture();
+    upstreamFixture = await createGitFixture();
   });
 
   afterEach(async () => {
     await fixture.cleanup();
+    await upstreamFixture.cleanup();
     vi.restoreAllMocks();
   });
 
@@ -227,10 +230,25 @@ describe('computeFoldIn', () => {
     const placement = placementWithBuckets([{ tag: tag('v1.1.0'), entries: [pr(500)] }]);
     placement.allTags = [tag('v1.1.0'), tag('v1.0.0')];
 
-    const upstreamPlacement = placementWithBuckets([
-      { tag: tag('1.2.6'), entries: [pr(2080), pr(2081)] },
-      { tag: tag('1.2.5'), entries: [pr(1990)] },
-    ]);
+    // Mirrors the real bug this test guards against: 1990 ships on the
+    // upstream's default branch, but 2080/2081 are backport-only commits
+    // that only ever land on the upstream's own support/1.x branch and are
+    // never merged forward — scoping placement to the pinned version tag
+    // itself (not the upstream's default branch) is what makes 2080
+    // findable regardless.
+    const shaAt1990 = await upstreamFixture.commit('fix 1990');
+    await upstreamFixture.branch('support/1.x');
+    await upstreamFixture.checkout('support/1.x');
+    await upstreamFixture.tag('1.2.5', '2024-01-01T00:00:00Z');
+    const shaAt2080 = await upstreamFixture.commit('backport 2080');
+    const shaAt2081 = await upstreamFixture.commit('noise 2081');
+    await upstreamFixture.tag('1.2.6', '2024-02-01T00:00:00Z');
+
+    const upstreamEntries = [
+      pr(1990, shaAt1990),
+      pr(2080, shaAt2080),
+      pr(2081, shaAt2081),
+    ];
 
     vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
       if (number === 2080) return ['runtime/module-a/src/main/java/Foo.java'];
@@ -245,7 +263,9 @@ describe('computeFoldIn', () => {
         classification: 'path',
       },
       placement,
-      upstreamPlacement,
+      upstreamEntries,
+      upstreamTagPattern: /^[0-9]+\.[0-9]+\.[0-9]+$/,
+      upstreamGitOptions: { cwd: upstreamFixture.dir },
       headRef: 'develop',
       gitDir: fixture.dir,
       gitOptions: { cwd: fixture.dir },

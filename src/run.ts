@@ -115,14 +115,6 @@ async function computeUpstreamFoldIn(
     { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD' },
     { cwd: upstreamDir },
   );
-  const upstreamPlacement = await place(
-    {
-      entries: upstreamResolved,
-      ref: 'HEAD',
-      tagPattern: new RegExp(upstreamFileConfig['tag-pattern'] || '.*'),
-    },
-    { cwd: upstreamDir },
-  );
 
   const dependencySet = upstream.classification === 'maven'
     ? await readDependencySet(options.gitDir, upstream['maven-group-id'] ?? `io.aklivity.${upstreamRepo}`)
@@ -134,7 +126,9 @@ async function computeUpstreamFoldIn(
   return await computeFoldIn({
     upstream,
     placement: ownPlacement,
-    upstreamPlacement,
+    upstreamEntries: upstreamResolved,
+    upstreamTagPattern: new RegExp(upstreamFileConfig['tag-pattern'] || '.*'),
+    upstreamGitOptions: { cwd: upstreamDir },
     headRef: options.ref,
     gitDir: options.gitDir,
     gitOptions: { cwd: options.gitDir },
