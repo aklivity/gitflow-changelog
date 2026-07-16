@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   release:
+    name: Release v${{ inputs.version }}
     runs-on: ubuntu-latest
     steps:
       - name: Configure git credentials
