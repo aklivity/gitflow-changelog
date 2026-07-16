@@ -83,8 +83,9 @@ function withFoldInOnlyBuckets(placement: Awaited<ReturnType<typeof place>>, fol
 // point of a stable path is that a caller can persist it across runs (e.g.
 // via actions/cache) so a full history transfer only happens once, not on
 // every single run. Reads the upstream's own .gitflow-changelog.yml so its
-// tag pattern and label categorization stay owned by that repo, same as any
-// direct run against it would use.
+// label categorization stays owned by that repo, same as any direct run
+// against it would use — fold-in itself resolves pinned versions by direct
+// ancestry (selectEntriesByVersionRange), independent of any tag pattern.
 async function computeUpstreamFoldIn(
   upstream: UpstreamConfig,
   ownPlacement: Awaited<ReturnType<typeof place>>,
@@ -126,7 +127,6 @@ async function computeUpstreamFoldIn(
     upstream,
     placement: ownPlacement,
     upstreamEntries: upstreamResolved,
-    upstreamTagPattern: new RegExp(upstreamFileConfig['tag-pattern'] || '.*'),
     upstreamGitOptions: { cwd: upstreamDir },
     headRef: options.ref,
     gitDir: options.gitDir,

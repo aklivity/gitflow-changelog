@@ -6,7 +6,7 @@ import {
   computeVersionRanges,
   filterForFoldIn,
   readVersionAtRef,
-  selectUpstreamEntries,
+  selectEntriesByVersionRange,
 } from '../src/upstream.js';
 import { createGitFixture, type GitFixture } from './git-fixture.js';
 
@@ -26,30 +26,86 @@ function placementWithBuckets(buckets: PlacementResult['buckets']): PlacementRes
   return { buckets, dropped: [], unresolved: [], allTags: buckets.map((b) => b.tag).filter((t): t is Tag => t !== null) };
 }
 
-describe('selectUpstreamEntries', () => {
-  const upstreamPlacement = placementWithBuckets([
-    { tag: tag('1.2.6'), entries: [pr(300), pr(301)] },
-    { tag: tag('1.2.5'), entries: [pr(200)] },
-    { tag: tag('1.2.4'), entries: [pr(100)] },
-  ]);
+describe('selectEntriesByVersionRange', () => {
+  let fixture: GitFixture;
 
-  it('selects entries strictly after fromVersion up to and including toVersion', () => {
-    const entries = selectUpstreamEntries(upstreamPlacement, '1.2.4', '1.2.6');
-    expect(entries.map((e) => e.number)).toEqual([300, 301, 200]);
+  beforeEach(async () => {
+    fixture = await createGitFixture();
   });
 
-  it('selects everything up to toVersion when fromVersion is undefined (first release)', () => {
-    const entries = selectUpstreamEntries(upstreamPlacement, undefined, '1.2.5');
-    expect(entries.map((e) => e.number)).toEqual([200, 100]);
+  afterEach(async () => {
+    await fixture.cleanup();
   });
 
-  it('returns nothing when toVersion has no matching upstream tag', () => {
-    expect(selectUpstreamEntries(upstreamPlacement, '1.2.4', '9.9.9')).toEqual([]);
+  it('selects entries strictly after fromVersion up to and including toVersion', async () => {
+    const shaAt100 = await fixture.commit('feature 100');
+    await fixture.tag('1.2.4', '2024-01-01T00:00:00Z');
+    const shaAt200 = await fixture.commit('feature 200');
+    await fixture.tag('1.2.5', '2024-02-01T00:00:00Z');
+    const shaAt300 = await fixture.commit('feature 300');
+    await fixture.tag('1.2.6', '2024-03-01T00:00:00Z');
+
+    const entries = await selectEntriesByVersionRange(
+      [pr(100, shaAt100), pr(200, shaAt200), pr(300, shaAt300)],
+      '1.2.4',
+      '1.2.6',
+      { cwd: fixture.dir },
+    );
+
+    expect(entries.map((e) => e.number)).toEqual([200, 300]);
   });
 
-  it('returns just that tag when fromVersion tag is not found in upstream placement', () => {
-    const entries = selectUpstreamEntries(upstreamPlacement, '0.0.1', '1.2.4');
+  it('selects everything up to toVersion when fromVersion is undefined (first release)', async () => {
+    const shaAt100 = await fixture.commit('feature 100');
+    await fixture.tag('1.2.4', '2024-01-01T00:00:00Z');
+    const shaAt200 = await fixture.commit('feature 200');
+    await fixture.tag('1.2.5', '2024-02-01T00:00:00Z');
+
+    const entries = await selectEntriesByVersionRange(
+      [pr(100, shaAt100), pr(200, shaAt200)],
+      undefined,
+      '1.2.5',
+      { cwd: fixture.dir },
+    );
+
+    expect(entries.map((e) => e.number)).toEqual([100, 200]);
+  });
+
+  it('excludes an entry not reachable from toVersion at all (a different, unrelated line of history)', async () => {
+    const shaOnMain = await fixture.commit('feature on main');
+    await fixture.tag('1.2.4', '2024-01-01T00:00:00Z');
+    await fixture.branch('other');
+    await fixture.checkout('other');
+    const shaOffBranch = await fixture.commit('unrelated branch work');
+
+    const entries = await selectEntriesByVersionRange(
+      [pr(100, shaOnMain), pr(200, shaOffBranch)],
+      undefined,
+      '1.2.4',
+      { cwd: fixture.dir },
+    );
+
     expect(entries.map((e) => e.number)).toEqual([100]);
+  });
+
+  // The actual bug this guards against: a consumer's pom.xml can pin a
+  // version that is a real, resolvable ref but doesn't look like a "real"
+  // release to upstream's own tag-pattern (e.g. tracking upstream's develop
+  // line via an alpha build) — resolution must not depend on that pattern.
+  it('resolves toVersion by ancestry even when it would never match a strict semver tag pattern', async () => {
+    const shaAt1 = await fixture.commit('feature 1');
+    await fixture.tag('1.0.0', '2024-01-01T00:00:00Z');
+    const shaAt2 = await fixture.commit('feature 2');
+    await fixture.tag('2.0.0-alpha-22', '2024-02-01T00:00:00Z');
+
+    const entries = await selectEntriesByVersionRange(
+      [pr(1, shaAt1), pr(2, shaAt2)],
+      '1.0.0',
+      '2.0.0-alpha-22',
+      { cwd: fixture.dir },
+    );
+
+    expect(entries.map((e) => e.number)).toEqual([2]);
   });
 });
 
@@ -317,7 +373,6 @@ describe('computeFoldIn', () => {
       },
       placement,
       upstreamEntries,
-      upstreamTagPattern: /^[0-9]+\.[0-9]+\.[0-9]+$/,
       upstreamGitOptions: { cwd: upstreamFixture.dir },
       headRef: 'develop',
       gitDir: fixture.dir,
@@ -330,6 +385,71 @@ describe('computeFoldIn', () => {
     expect(section).toBeDefined();
     expect(section?.fromVersion).toBe('1.2.5');
     expect(section?.toVersion).toBe('1.2.6');
+    expect(section?.entries.map((e) => e.number)).toEqual([2080]);
+  });
+
+  // Reproduces #10: a consumer's pom.xml can pin a version tracking
+  // upstream's own develop line via an alpha/rc build — one that would
+  // never satisfy a strict semver tag pattern. Fold-in must still find
+  // the qualifying entries for it.
+  it('folds in entries for an Unreleased bucket pinning an upstream alpha version', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const git = promisify(execFile);
+
+    async function writePom(version: string) {
+      await writeFile(
+        join(fixture.dir, 'pom.xml'),
+        `<project><properties><engine.version>${version}</engine.version></properties></project>`,
+        'utf8',
+      );
+      await git('git', ['add', 'pom.xml'], { cwd: fixture.dir });
+    }
+
+    await writePom('2.0.0-alpha-21');
+    await fixture.commit('bump to 2.0.0-alpha-21');
+    await fixture.tag('v1.0.0', '2024-01-01T00:00:00Z');
+
+    await writePom('2.0.0-alpha-22');
+    await fixture.commit('bump to 2.0.0-alpha-22');
+    // No new consumer tag — this bump only shows up in the Unreleased bucket.
+
+    const placement = placementWithBuckets([{ tag: tag('v1.0.0'), entries: [] }]);
+    placement.allTags = [tag('v1.0.0')];
+
+    const shaAtAlpha21 = await upstreamFixture.commit('feature pre-21');
+    await upstreamFixture.tag('2.0.0-alpha-21', '2024-01-01T00:00:00Z');
+    const shaAtAlpha22 = await upstreamFixture.commit('feature for 22');
+    await upstreamFixture.tag('2.0.0-alpha-22', '2024-02-01T00:00:00Z');
+
+    const upstreamEntries = [pr(1990, shaAtAlpha21), pr(2080, shaAtAlpha22)];
+
+    vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async () => [
+      'runtime/module-a/src/main/java/Foo.java',
+    ]);
+
+    const sections = await computeFoldIn({
+      upstream: {
+        repo: 'acme/engine',
+        'dependency-version-file': 'pom.xml',
+        'dependency-version-property': 'engine.version',
+        classification: 'path',
+      },
+      placement,
+      upstreamEntries,
+      upstreamGitOptions: { cwd: upstreamFixture.dir },
+      headRef: 'develop',
+      gitDir: fixture.dir,
+      gitOptions: { cwd: fixture.dir },
+      token: 't',
+    });
+
+    const section = sections.get(null);
+    expect(section).toBeDefined();
+    expect(section?.fromVersion).toBe('2.0.0-alpha-21');
+    expect(section?.toVersion).toBe('2.0.0-alpha-22');
     expect(section?.entries.map((e) => e.number)).toEqual([2080]);
   });
 });
