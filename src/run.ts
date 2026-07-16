@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { loadCache, saveCache } from './cache.js';
 import { GithubDriver } from './drivers/github.js';
 import { cloneOrUpdateRepo } from './git.js';
-import { readDependencySet, readModuleArtifactIds } from './maven.js';
+import { expandTransitiveDependencySet, indexMavenModules, readDependencySet } from './maven.js';
 import { EMPTY_OVERRIDES, loadOverrides } from './overrides.js';
 import { place } from './placement.js';
 import type { FoldInsByBucket } from './render/default.js';
@@ -116,12 +116,19 @@ async function computeUpstreamFoldIn(
     { cwd: upstreamDir },
   );
 
-  const dependencySet = upstream.classification === 'maven'
-    ? await readDependencySet(options.gitDir, upstream['maven-group-id'] ?? `io.aklivity.${upstreamRepo}`)
+  const groupId = upstream['maven-group-id'] ?? `io.aklivity.${upstreamRepo}`;
+  const modules = upstream.classification === 'maven'
+    ? await indexMavenModules(upstreamDir, groupId)
     : undefined;
-  const moduleArtifactIds = upstream.classification === 'maven'
-    ? await readModuleArtifactIds(upstreamDir)
+  const directDependencySet = upstream.classification === 'maven'
+    ? await readDependencySet(options.gitDir, groupId)
     : undefined;
+  // Expanded here, once per upstream per run, rather than inside
+  // filterForFoldIn per entry — the upstream's own module graph doesn't
+  // change within a single run, so there's no reason to re-walk it per PR.
+  const dependencySet = directDependencySet && modules
+    ? expandTransitiveDependencySet(directDependencySet, modules)
+    : directDependencySet;
 
   const sections = await computeFoldIn({
     upstream,
@@ -132,7 +139,7 @@ async function computeUpstreamFoldIn(
     gitDir: options.gitDir,
     gitOptions: { cwd: options.gitDir },
     dependencySet,
-    moduleArtifactIds,
+    modules,
     prFilesCache: upstreamCache.prFiles,
     token: options.token,
   });

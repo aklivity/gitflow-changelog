@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as githubDriver from '../src/drivers/github.js';
 import * as gitModule from '../src/git.js';
+import type { MavenModule } from '../src/maven.js';
 import type { Entry, PlacementResult, Tag } from '../src/types.js';
 import {
   computeFoldIn,
@@ -257,16 +258,46 @@ describe('filterForFoldIn', () => {
       return ['runtime/module-b/src/main/java/Bar.java'];
     });
 
+    const modules: MavenModule[] = [
+      { dir: 'runtime/module-a', artifactId: 'module-a', dependencies: [] },
+      { dir: 'runtime/module-b', artifactId: 'module-b', dependencies: [] },
+    ];
+
     const entries = await filterForFoldIn([pr(1), pr(2)], {
       level: 'maven',
       owner: 'acme',
       repo: 'engine',
       token: 't',
       dependencySet: new Set(['module-a']),
-      moduleArtifactIds: new Map([
-        ['module-a', 'module-a'],
-        ['module-b', 'module-b'],
-      ]),
+      modules,
+    });
+
+    expect(entries.map((e) => e.number)).toEqual([1]);
+  });
+
+  // classifyPaths' own default featurePaths list (runtime/, specs/,
+  // incubator/) is a separate, independently-configurable concern from
+  // module resolution — overridden here so this test isolates the
+  // resolveModule/module-index behavior it's actually about.
+  it('resolves a touched module by nearest enclosing pom.xml, not a runtime/-prefix assumption', async () => {
+    vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
+      if (number === 1) return ['manager/src/main/java/io/example/Foo.java'];
+      return ['cloud/docker-image/src/main/docker/zpm.json.template'];
+    });
+
+    const modules: MavenModule[] = [
+      { dir: 'manager', artifactId: 'manager', dependencies: [] },
+      { dir: 'cloud/docker-image', artifactId: 'docker-image', dependencies: [] },
+    ];
+
+    const entries = await filterForFoldIn([pr(1), pr(2)], {
+      level: 'maven',
+      owner: 'acme',
+      repo: 'engine',
+      token: 't',
+      dependencySet: new Set(['manager']),
+      modules,
+      patterns: { featurePaths: ['**/src/main/**'], testPaths: ['**/src/test/**'] },
     });
 
     expect(entries.map((e) => e.number)).toEqual([1]);
