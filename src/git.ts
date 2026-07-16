@@ -134,8 +134,11 @@ export async function cloneOrUpdateRepo(owner: string, repo: string, dir: string
   await runGit(['remote', 'set-url', 'origin', url], dir);
   await runGit(['fetch', '--quiet', '--tags', '--prune', 'origin'], dir);
   await runGit(['remote', 'set-head', 'origin', '-a'], dir);
+  // --short on refs/remotes/origin/HEAD returns "origin/<branch>" (only the
+  // refs/remotes/ prefix is stripped, not the remote name) — strip it too,
+  // or the checkout below builds "origin/origin/<branch>" and fails.
   const { stdout } = await execFileAsync('git', ['-C', dir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
-  const defaultBranch = stdout.trim();
+  const defaultBranch = stdout.trim().replace(/^origin\//, '');
   await runGit(['checkout', '--quiet', '-B', defaultBranch, `origin/${defaultBranch}`], dir);
 }
 
