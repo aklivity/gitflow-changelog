@@ -225,14 +225,15 @@ describe('filterForFoldIn', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns only PR-kind entries unfiltered when classification level is none', async () => {
+  it('returns every entry unfiltered when classification level is none, PR and issue alike', async () => {
     const entries = await filterForFoldIn([pr(1), issue(2)], {
       level: 'none',
       owner: 'acme',
       repo: 'engine',
       token: 't',
+      gitOptions: { cwd: '.' },
     });
-    expect(entries.map((e) => e.number)).toEqual([1]);
+    expect(entries.map((e) => e.number)).toEqual([1, 2]);
   });
 
   it('drops PRs classified as noise or test-only when level is path', async () => {
@@ -247,6 +248,7 @@ describe('filterForFoldIn', () => {
       owner: 'acme',
       repo: 'engine',
       token: 't',
+      gitOptions: { cwd: '.' },
     });
 
     expect(entries.map((e) => e.number)).toEqual([1]);
@@ -270,9 +272,83 @@ describe('filterForFoldIn', () => {
       token: 't',
       dependencySet: new Set(['module-a']),
       modules,
+      gitOptions: { cwd: '.' },
     });
 
     expect(entries.map((e) => e.number)).toEqual([1]);
+  });
+
+  // Reproduces #17: an issue auto-closed by a merged PR shares that PR's
+  // merge-commit sha (applyClosingReferences backfills it in
+  // drivers/github.ts), so it should inherit that PR's in/out-of-scope
+  // determination instead of being dropped outright for being issue-kind.
+  it('classifies an issue by its closing PR file list when their shas match', async () => {
+    vi.spyOn(githubDriver, 'fetchPullRequestFiles').mockImplementation(async (_owner, _repo, number) => {
+      if (number === 1) return ['runtime/module-a/src/main/java/Foo.java'];
+      return ['runtime/module-b/src/main/java/Bar.java'];
+    });
+
+    const modules: MavenModule[] = [
+      { dir: 'runtime/module-a', artifactId: 'module-a', dependencies: [] },
+      { dir: 'runtime/module-b', artifactId: 'module-b', dependencies: [] },
+    ];
+
+    const closingPr = pr(1, 'shared-sha');
+    const inScopeIssue: Entry = { ...issue(101), sha: 'shared-sha' };
+    const outOfScopePr = pr(2, 'other-sha');
+    const outOfScopeIssue: Entry = { ...issue(102), sha: 'other-sha' };
+
+    const entries = await filterForFoldIn([closingPr, inScopeIssue, outOfScopePr, outOfScopeIssue], {
+      level: 'maven',
+      owner: 'acme',
+      repo: 'engine',
+      token: 't',
+      dependencySet: new Set(['module-a']),
+      modules,
+      gitOptions: { cwd: '.' },
+    });
+
+    expect(entries.map((e) => e.number)).toEqual([1, 101]);
+  });
+
+  // Reproduces #17's other case: an issue closed directly by a commit (no
+  // matching PR sha in this entry set at all) still gets classified, via a
+  // local git diff against the upstream clone, instead of being dropped
+  // unconditionally.
+  it('classifies an issue with no matching PR sha via a local git diff of its own commit', async () => {
+    const upstream = await createGitFixture();
+    try
+    {
+      await upstream.commit('unrelated setup');
+      const { writeFile, mkdir } = await import('node:fs/promises');
+      const { join } = await import('node:path');
+      await mkdir(join(upstream.dir, 'runtime', 'module-a', 'src', 'main', 'java'), { recursive: true });
+      await writeFile(join(upstream.dir, 'runtime', 'module-a', 'src', 'main', 'java', 'Foo.java'), 'class Foo {}');
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const git = promisify(execFile);
+      await git('git', ['add', 'runtime/module-a/src/main/java/Foo.java'], { cwd: upstream.dir });
+      const directCloseSha = await upstream.commit('direct commit closing the issue');
+
+      const modules: MavenModule[] = [{ dir: 'runtime/module-a', artifactId: 'module-a', dependencies: [] }];
+      const directClosedIssue: Entry = { ...issue(200), sha: directCloseSha };
+
+      const entries = await filterForFoldIn([directClosedIssue], {
+        level: 'maven',
+        owner: 'acme',
+        repo: 'engine',
+        token: 't',
+        dependencySet: new Set(['module-a']),
+        modules,
+        gitOptions: { cwd: upstream.dir },
+      });
+
+      expect(entries.map((e) => e.number)).toEqual([200]);
+    }
+    finally
+    {
+      await upstream.cleanup();
+    }
   });
 
   // No `patterns` override here at all — both classification (deriving
@@ -298,6 +374,7 @@ describe('filterForFoldIn', () => {
       token: 't',
       dependencySet: new Set(['manager']),
       modules,
+      gitOptions: { cwd: '.' },
     });
 
     expect(entries.map((e) => e.number)).toEqual([1]);
@@ -315,6 +392,7 @@ describe('filterForFoldIn', () => {
       repo: 'engine',
       token: 't',
       prFilesCache: { 1: ['runtime/module-a/src/main/java/Foo.java'] },
+      gitOptions: { cwd: '.' },
     });
 
     expect(entries.map((e) => e.number)).toEqual([1, 2]);
@@ -332,6 +410,7 @@ describe('filterForFoldIn', () => {
       repo: 'engine',
       token: 't',
       prFilesCache: cache,
+      gitOptions: { cwd: '.' },
     });
 
     expect(cache).toEqual({
@@ -349,6 +428,7 @@ describe('filterForFoldIn', () => {
       owner: 'acme',
       repo: 'engine',
       token: 't',
+      gitOptions: { cwd: '.' },
     });
 
     expect(entries.map((e) => e.number)).toEqual(prs.map((p) => p.number));

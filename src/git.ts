@@ -190,3 +190,22 @@ export async function scanCommitsReferencingNumbers(ref: string, options: GitOpt
   }
   return byNumber;
 }
+
+// Files touched by a single commit, diffed against its first parent — this
+// covers both an ordinary commit (its only parent) and a merge commit (the
+// net change the merge brought in on the mainline), which is what a direct
+// "closed by commit_id" issue-closing commit or a squash-merge commit
+// actually represents. Used to classify a fold-in issue entry whose sha
+// doesn't match any fetched PR's merge commit (see resolveModule/
+// filterForFoldIn in upstream.ts) without needing a GitHub API call.
+export async function filesChangedInCommit(sha: string, options: GitOptions): Promise<string[]> {
+  const result = await runAllowFailure(['diff', '--name-only', `${sha}^`, sha], options);
+  if (result.code !== 0)
+  {
+    return [];
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}

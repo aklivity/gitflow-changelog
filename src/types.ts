@@ -71,12 +71,14 @@ export type PlacementResult = z.infer<typeof PlacementResult>;
 export const ClassificationLevel = z.enum(['none', 'path', 'maven']);
 export type ClassificationLevel = z.infer<typeof ClassificationLevel>;
 
-// Path-based classification outcome for one PR. A PR classifies as `feature`
-// if ANY changed path matches a feature-include pattern, even if it also
-// touches excluded paths in the same diff — inclusive-OR toward "real,"
-// not requiring every path clean. Only PRs are classified (the underlying
-// GET /pulls/{number}/files call has no issue equivalent); issues pass
-// through fold-in filtering unclassified.
+// Path-based classification outcome for one fold-in entry. An entry
+// classifies as `feature` if ANY changed path matches a feature-include
+// pattern, even if it also touches excluded paths in the same diff —
+// inclusive-OR toward "real," not requiring every path clean. PRs are
+// classified against the GitHub `GET /pulls/{number}/files` list; issues
+// have no such endpoint, so they're classified against the file list of
+// whichever commit resolved their `sha` (see resolveIssuePaths in
+// upstream.ts).
 export const PathClassification = z.enum(['feature', 'noise', 'test-only']);
 export type PathClassification = z.infer<typeof PathClassification>;
 

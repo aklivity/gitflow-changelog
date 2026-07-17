@@ -1,6 +1,6 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
 import type { GitOptions, TagInfo } from './git.js';
-import { listTags, showFile, tagsContaining } from './git.js';
+import { filesChangedInCommit, listTags, showFile, tagsContaining } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import type { MavenModule } from './maven.js';
@@ -168,6 +168,10 @@ export interface FoldInFilterOptions {
   // fetched file list survives beyond this call — a merged PR's files never
   // change, so once fetched a number never needs fetching again.
   prFilesCache?: Record<string, string[]>;
+  // The upstream's own local clone — used to resolve an issue-kind entry's
+  // file list via filesChangedInCommit when its sha doesn't match any
+  // fetched PR's merge commit (see the comment on filterForFoldIn below).
+  gitOptions: GitOptions;
 }
 
 const FETCH_CONCURRENCY = 8;
@@ -223,19 +227,49 @@ async function resolvePullRequestFiles(
   return resolved;
 }
 
-// Only pull requests carry a diff to classify — issues have no file list
-// of their own, so `none`/`path`/`maven` filtering only ever drops or
-// keeps PR-kind entries; issue-kind entries are outside this feature's
-// scope entirely (a changelog fold-in is about absorbed *code*, and an
-// issue by itself never represents shipped code).
-export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOptions): Promise<Entry[]> {
-  const pullRequests = entries.filter((entry) => entry.kind === 'pr');
-  if (options.level === 'none')
+// An issue-kind entry has no file list of its own from the GitHub API, but
+// by the time it reaches this function it always carries a resolved `sha`
+// (resolveHashes drops anything that doesn't resolve to a real commit) —
+// either its own direct closing commit, or, in the common "auto-closed by a
+// merged PR" case, that PR's merge commit (backfilled by
+// applyClosingReferences in drivers/github.ts). So an issue can be
+// classified exactly like a PR: reuse the matching PR's already-fetched file
+// list when its sha lines up with one in this same entry set (free — no
+// extra fetch), otherwise fall back to a local `git diff` against the
+// upstream clone for that specific commit.
+async function resolveIssuePaths(
+  issues: Entry[],
+  pullRequests: Entry[],
+  pathsByNumber: Map<number, string[]>,
+  options: FoldInFilterOptions,
+): Promise<Map<number, string[]>> {
+  const prNumberBySha = new Map<string, number>();
+  for (const pr of pullRequests)
   {
-    return pullRequests;
+    prNumberBySha.set(pr.sha, pr.number);
   }
 
+  const resolved = new Map<number, string[]>();
+  await forEachWithConcurrency(issues, FETCH_CONCURRENCY, async (issue) => {
+    const matchingPrNumber = prNumberBySha.get(issue.sha);
+    const paths = matchingPrNumber !== undefined
+      ? (pathsByNumber.get(matchingPrNumber) ?? [])
+      : await filesChangedInCommit(issue.sha, options.gitOptions);
+    resolved.set(issue.number, paths);
+  });
+  return resolved;
+}
+
+export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOptions): Promise<Entry[]> {
+  if (options.level === 'none')
+  {
+    return entries;
+  }
+
+  const pullRequests = entries.filter((entry) => entry.kind === 'pr');
+  const issues = entries.filter((entry) => entry.kind === 'issue');
   const pathsByNumber = await resolvePullRequestFiles(pullRequests, options);
+  const issuePathsByNumber = await resolveIssuePaths(issues, pullRequests, pathsByNumber, options);
 
   // An explicit override always wins. Otherwise, whenever a Maven module
   // index is available (any 'maven'-classified upstream) it's strictly more
@@ -247,9 +281,9 @@ export async function filterForFoldIn(entries: Entry[], options: FoldInFilterOpt
     ?? (options.modules ? { featurePaths: featurePathsFromModules(options.modules), testPaths: DEFAULT_CLASSIFICATION_PATTERNS.testPaths } : DEFAULT_CLASSIFICATION_PATTERNS);
 
   const filtered: Entry[] = [];
-  for (const entry of pullRequests)
+  for (const entry of entries)
   {
-    const paths = pathsByNumber.get(entry.number) ?? [];
+    const paths = entry.kind === 'pr' ? (pathsByNumber.get(entry.number) ?? []) : (issuePathsByNumber.get(entry.number) ?? []);
     const classification = classifyPaths(paths, patterns);
     if (classification !== 'feature')
     {
@@ -329,6 +363,7 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
       dependencySet: options.dependencySet,
       modules: options.modules,
       prFilesCache: options.prFilesCache,
+      gitOptions: options.upstreamGitOptions,
     });
     if (entries.length > 0)
     {
