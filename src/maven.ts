@@ -8,6 +8,7 @@ interface PomDependency {
   groupId?: string;
   artifactId?: string;
   scope?: string;
+  version?: unknown;
 }
 
 interface PomProject {
@@ -47,6 +48,12 @@ export interface DependencyEdge {
   artifactId: string;
   // Defaults to 'compile' when unspecified, matching Maven's own default.
   scope: string;
+  // Raw <version> text as written in the pom — e.g. "${zilla.version}" or a
+  // literal "1.2.6" — undefined when the dependency carries no explicit
+  // version at all (inherited from a parent's dependencyManagement). Used
+  // by findGroupVersionSource to discover which property pins a groupId's
+  // version, rather than requiring it to be hand-specified in config.
+  version?: string;
 }
 
 // A dependency scoped 'test' or 'system' is never pulled in by whatever
@@ -66,7 +73,11 @@ const EXCLUDED_SCOPES = new Set(['test', 'system']);
 export function readDependencyEdges(pomXml: string, groupId: string): DependencyEdge[] {
   return asList(parsePom(pomXml).dependencies?.dependency)
     .filter((dependency) => dependency.groupId === groupId && dependency.artifactId !== undefined)
-    .map((dependency) => ({ artifactId: dependency.artifactId as string, scope: dependency.scope ?? 'compile' }))
+    .map((dependency) => ({
+      artifactId: dependency.artifactId as string,
+      scope: dependency.scope ?? 'compile',
+      version: dependency.version === undefined ? undefined : String(dependency.version),
+    }))
     .filter((edge) => !EXCLUDED_SCOPES.has(edge.scope));
 }
 
@@ -136,6 +147,70 @@ export async function readDependencySet(gitDir: string, groupId: string): Promis
     }
   }
   return artifactIds;
+}
+
+const PROPERTY_PLACEHOLDER = /^\$\{([^}]+)\}$/;
+
+export interface GroupVersionSource {
+  // Repo-relative, POSIX-separated — the pom.xml that defines the property
+  // pinning this groupId's version, not necessarily the one declaring the
+  // dependency itself (e.g. a submodule depending on ${zilla.version}, a
+  // property defined only at the repo root).
+  file: string;
+  property: string;
+}
+
+// Discovers which property pins every io.aklivity.<x>-style groupId's
+// version in a checkout, instead of requiring a human to already know and
+// hand-specify it in config (dependency-version-file/-property). Every
+// artifact under one groupId is assumed to share one version — true for
+// every Aklivity repo (e.g. zilla-plus depends on many io.aklivity.zilla:*
+// artifacts, all via the single ${zilla.version} property) — so the first
+// dependency edge found under groupId with a property-form <version> (as
+// opposed to a literal, or none at all — inherited from a parent's
+// dependencyManagement, unsupported here) settles it. The property itself
+// is looked up in the declaring pom's own <properties> first, then the
+// repo root pom.xml as a fallback, matching the real two-level inheritance
+// this convention actually relies on (declaring modules rarely redefine a
+// shared version property locally; it's normally set once at the root and
+// inherited).
+export async function findGroupVersionSource(gitDir: string, groupId: string): Promise<GroupVersionSource | undefined> {
+  const pomPaths = await findPomFiles(gitDir);
+  const rootPomPath = join(gitDir, 'pom.xml');
+  const rootPomXml = await readFile(rootPomPath, 'utf8').catch(() => undefined);
+
+  for (const pomPath of pomPaths)
+  {
+    let pomXml: string;
+    try
+    {
+      pomXml = await readFile(pomPath, 'utf8');
+    }
+    catch
+    {
+      continue;
+    }
+
+    for (const edge of readDependencyEdges(pomXml, groupId))
+    {
+      const property = edge.version === undefined ? undefined : PROPERTY_PLACEHOLDER.exec(edge.version)?.[1];
+      if (property === undefined)
+      {
+        continue;
+      }
+
+      const file = relative(gitDir, pomPath).split(sep).join('/');
+      if (readDependencyVersion(pomXml, property) !== undefined)
+      {
+        return { file, property };
+      }
+      if (rootPomXml !== undefined && readDependencyVersion(rootPomXml, property) !== undefined)
+      {
+        return { file: 'pom.xml', property };
+      }
+    }
+  }
+  return undefined;
 }
 
 export interface MavenModule {

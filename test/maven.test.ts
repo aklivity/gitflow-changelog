@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MavenModule } from '../src/maven.js';
 import {
   expandTransitiveDependencySet,
+  findGroupVersionSource,
   indexMavenModules,
   readDependencyArtifactIds,
   readDependencyEdges,
@@ -125,6 +126,34 @@ describe('readDependencyEdges', () => {
     const edges = readDependencyEdges(moduleWithScopesPom(), 'com.acme.engine');
     expect(edges.map((edge) => edge.artifactId)).not.toContain('test-dep');
     expect(edges.map((edge) => edge.artifactId)).not.toContain('system-dep');
+  });
+
+  it('captures the raw <version> text, property placeholder and literal alike', () => {
+    const pomXml = `<?xml version="1.0"?>
+<project>
+  <artifactId>module-versioned</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>com.acme.engine</groupId>
+      <artifactId>engine</artifactId>
+      <version>\${engine.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.acme.engine</groupId>
+      <artifactId>pinned</artifactId>
+      <version>1.2.6</version>
+    </dependency>
+    <dependency>
+      <groupId>com.acme.engine</groupId>
+      <artifactId>unversioned</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+`;
+    const edges = readDependencyEdges(pomXml, 'com.acme.engine');
+    expect(edges).toContainEqual({ artifactId: 'engine', scope: 'compile', version: '${engine.version}' });
+    expect(edges).toContainEqual({ artifactId: 'pinned', scope: 'compile', version: '1.2.6' });
+    expect(edges.find((edge) => edge.artifactId === 'unversioned')?.version).toBeUndefined();
   });
 });
 
@@ -323,5 +352,119 @@ describe('readDependencySet, indexMavenModules (filesystem)', () => {
     {
       await rm(emptyDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('findGroupVersionSource (filesystem)', () => {
+  let gitDir: string;
+
+  beforeEach(async () => {
+    gitDir = await mkdtemp(join(tmpdir(), 'gitflow-changelog-groupversion-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(gitDir, { recursive: true, force: true });
+  });
+
+  // Mirrors zilla-plus's real layout: the shared version property lives
+  // only at the repo root, and a submodule several directories deep (never
+  // the root pom itself) is the one that actually declares the dependency.
+  it('finds a property defined at the repo root, declared from a nested module', async () => {
+    await writeFile(
+      join(gitDir, 'pom.xml'),
+      `<?xml version="1.0"?>
+<project>
+  <artifactId>zilla-plus</artifactId>
+  <properties>
+    <zilla.version>1.2.6</zilla.version>
+  </properties>
+</project>
+`,
+      'utf8',
+    );
+    await mkdir(join(gitDir, 'cloud', 'docker-image'), { recursive: true });
+    await writeFile(
+      join(gitDir, 'cloud', 'docker-image', 'pom.xml'),
+      `<?xml version="1.0"?>
+<project>
+  <artifactId>docker-image</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>io.aklivity.zilla</groupId>
+      <artifactId>engine</artifactId>
+      <version>\${zilla.version}</version>
+    </dependency>
+  </dependencies>
+</project>
+`,
+      'utf8',
+    );
+
+    const source = await findGroupVersionSource(gitDir, 'io.aklivity.zilla');
+    expect(source).toEqual({ file: 'pom.xml', property: 'zilla.version' });
+  });
+
+  it('prefers a property defined in the declaring module\'s own pom over the root', async () => {
+    await writeFile(
+      join(gitDir, 'pom.xml'),
+      `<?xml version="1.0"?>
+<project>
+  <artifactId>app</artifactId>
+  <properties>
+    <engine.version>9.9.9</engine.version>
+  </properties>
+</project>
+`,
+      'utf8',
+    );
+    await mkdir(join(gitDir, 'runtime', 'module-a'), { recursive: true });
+    await writeFile(
+      join(gitDir, 'runtime', 'module-a', 'pom.xml'),
+      `<?xml version="1.0"?>
+<project>
+  <artifactId>module-a</artifactId>
+  <properties>
+    <engine.version>1.2.6</engine.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>io.aklivity.engine</groupId>
+      <artifactId>engine</artifactId>
+      <version>\${engine.version}</version>
+    </dependency>
+  </dependencies>
+</project>
+`,
+      'utf8',
+    );
+
+    const source = await findGroupVersionSource(gitDir, 'io.aklivity.engine');
+    expect(source).toEqual({ file: 'runtime/module-a/pom.xml', property: 'engine.version' });
+  });
+
+  it('returns undefined when no dependency under the groupId has a property-form version', async () => {
+    await writeFile(
+      join(gitDir, 'pom.xml'),
+      `<?xml version="1.0"?>
+<project>
+  <artifactId>app</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>io.aklivity.engine</groupId>
+      <artifactId>engine</artifactId>
+      <version>1.2.6</version>
+    </dependency>
+  </dependencies>
+</project>
+`,
+      'utf8',
+    );
+
+    expect(await findGroupVersionSource(gitDir, 'io.aklivity.engine')).toBeUndefined();
+  });
+
+  it('returns undefined when the groupId is not referenced at all', async () => {
+    await writeFile(join(gitDir, 'pom.xml'), APP_ROOT_POM, 'utf8');
+    expect(await findGroupVersionSource(gitDir, 'io.aklivity.nonexistent')).toBeUndefined();
   });
 });
