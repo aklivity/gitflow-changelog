@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { loadCache, saveCache } from './cache.js';
+import { resolveUpstreamConfig } from './discover-upstream.js';
 import { GithubDriver } from './drivers/github.js';
 import { cloneOrUpdateRepo } from './git.js';
 import { expandTransitiveDependencySet, indexMavenModules, readDependencySet } from './maven.js';
@@ -11,7 +12,7 @@ import { resolveHashes } from './resolve.js';
 import { loadRepoConfig } from './repo-config.js';
 import type { FoldInSection } from './upstream.js';
 import { computeFoldIn } from './upstream.js';
-import type { DriverOptions, UpstreamConfig } from './types.js';
+import type { DriverOptions, ExplicitUpstreamConfig, UpstreamConfig } from './types.js';
 
 export interface RunOptions {
   owner: string;
@@ -87,7 +88,7 @@ function withFoldInOnlyBuckets(placement: Awaited<ReturnType<typeof place>>, fol
 // against it would use — fold-in itself places upstream entries globally,
 // unscoped by any tag pattern (see placeUpstreamGlobally in upstream.ts).
 async function computeUpstreamFoldIn(
-  upstream: UpstreamConfig,
+  upstream: ExplicitUpstreamConfig,
   ownPlacement: Awaited<ReturnType<typeof place>>,
   options: RunOptions,
 ): Promise<Map<string | null, FoldInSection>> {
@@ -192,8 +193,18 @@ export async function run(options: RunOptions): Promise<RunResult> {
   placement.unresolved = unresolved;
 
   const foldIns: FoldInsByBucket = new Map();
-  for (const upstream of options.upstream)
+  for (const upstreamConfig of options.upstream)
   {
+    const { config: upstream, warning } = await resolveUpstreamConfig(upstreamConfig, options.gitDir);
+    if (warning !== undefined)
+    {
+      warnings.push(warning);
+    }
+    if (upstream === undefined)
+    {
+      continue;
+    }
+
     const sections = await computeUpstreamFoldIn(upstream, placement, options);
     for (const [bucketTag, section] of sections)
     {

@@ -5,7 +5,7 @@ import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules
 import type { ClassificationPatterns } from './classification.js';
 import type { MavenModule } from './maven.js';
 import { readDependencyVersion, resolveModule } from './maven.js';
-import type { ClassificationLevel, Entry, PlacementResult, Tag, UpstreamConfig } from './types.js';
+import type { ClassificationLevel, Entry, ExplicitUpstreamConfig, PlacementResult, Tag } from './types.js';
 
 export interface VersionRange {
   bucketTag: string | null;
@@ -316,7 +316,7 @@ export interface FoldInSection {
 }
 
 export interface ComputeFoldInOptions {
-  upstream: UpstreamConfig;
+  upstream: ExplicitUpstreamConfig;
   placement: PlacementResult;
   upstreamEntries: Entry[];
   upstreamGitOptions: GitOptions;

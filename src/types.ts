@@ -87,7 +87,7 @@ export type PathClassification = z.infer<typeof PathClassification>;
 // where to read the pinned version from, at any given git ref (e.g. a
 // release tag), so the absorbed range can be computed as
 // (version at previous tag, version at this tag].
-export const UpstreamConfig = z.object({
+export const ExplicitUpstreamConfig = z.object({
   repo: z.string(),
   'dependency-version-file': z.string(),
   'dependency-version-property': z.string(),
@@ -97,6 +97,26 @@ export const UpstreamConfig = z.object({
   // follows) when omitted, so most configs never need to set it.
   'maven-group-id': z.string().optional(),
 });
+export type ExplicitUpstreamConfig = z.infer<typeof ExplicitUpstreamConfig>;
+
+// repo/dependency-version-file/dependency-version-property above all
+// duplicate information the Maven ecosystem already publishes: which
+// property pins a groupId's version is discoverable from the consuming
+// repo's own poms (findGroupVersionSource in maven.ts), and the upstream's
+// own repo is discoverable from its published pom's <scm> block
+// (extractGithubRepo in registry.ts) — see resolveUpstreamConfig in run.ts.
+// `artifactId` here identifies which pom to fetch for that <scm> lookup
+// (the upstream's root/aggregator artifact); the version-discovery step
+// matches on `groupId` alone, since nothing depends on a bare aggregator
+// artifact directly.
+export const DiscoveredUpstreamConfig = z.object({
+  groupId: z.string(),
+  artifactId: z.string(),
+  classification: ClassificationLevel,
+});
+export type DiscoveredUpstreamConfig = z.infer<typeof DiscoveredUpstreamConfig>;
+
+export const UpstreamConfig = z.union([ExplicitUpstreamConfig, DiscoveredUpstreamConfig]);
 export type UpstreamConfig = z.infer<typeof UpstreamConfig>;
 
 export interface DriverOptions {
