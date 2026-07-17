@@ -82,11 +82,28 @@ function tagDate(isoDate: string): string {
 
 // A one-line note per upstream source, placed once per bucket rather than
 // repeated per entry — the entries themselves carry the owner/repo#N tag,
-// this just states the absorbed version range for context.
+// this just states the absorbed version range for context. Linked to the
+// upstream repo's own diff for that range: the section's top-of-bucket
+// "Full Changelog" link only ever covers this repo's own tags, so once a
+// bucket folds in another repo's entries, that link alone no longer
+// describes everything the section covers. fromVersion/toVersion are real
+// tag names in the upstream repo (selectEntriesInRange matches them
+// against the upstream's own tag list), so a compare link between them is
+// exactly as accurate as the repo's own "Full Changelog" link. With no
+// fromVersion (first-ever absorbed range, nothing to diff from), link the
+// single toVersion tag instead of a compare. Linked unconditionally,
+// regardless of the upstream's org relative to this repo's — the per-entry
+// owner/repo#N links already point into the upstream repo the same way
+// with no such check, so this line is no different a reachability
+// assumption than content this renderer already produces everywhere else.
 function foldInNote(foldIn: FoldInSection): string {
   const [, repoName] = foldIn.repo.split('/');
+  const repoUrl = `https://github.com/${foldIn.repo}`;
   const range = foldIn.fromVersion ? `${foldIn.fromVersion}–${foldIn.toVersion}` : `up to ${foldIn.toVersion}`;
-  return `_Includes ${repoName} ${range}._`;
+  const url = foldIn.fromVersion
+    ? `${repoUrl}/compare/${foldIn.fromVersion}...${foldIn.toVersion}`
+    : `${repoUrl}/tree/${foldIn.toVersion}`;
+  return `_Includes [${repoName} ${range}](${url})._`;
 }
 
 function renderBucket(

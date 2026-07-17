@@ -107,7 +107,7 @@ describe('render', () => {
 
     const markdown = render(placement, OPTIONS, foldIns);
 
-    expect(markdown).toContain('_Includes engine 1.2.5–1.2.6._');
+    expect(markdown).toContain('_Includes [engine 1.2.5–1.2.6](https://github.com/acme/engine/compare/1.2.5...1.2.6)._');
     expect(markdown).toContain('**Merged pull requests:**');
     expect(markdown).toContain('- Our own PR [\\#6](https://github.com/acme/widget/pull/6)');
     expect(markdown).toContain(
@@ -137,6 +137,30 @@ describe('render', () => {
 
     const markdown = render(placement, OPTIONS, foldIns);
 
-    expect(markdown).toContain('_Includes engine up to 1.0.0._');
+    expect(markdown).toContain('_Includes [engine up to 1.0.0](https://github.com/acme/engine/tree/1.0.0)._');
+  });
+
+  // Linked the same way regardless of the upstream's org relative to this
+  // repo's — the per-entry owner/repo#N links already point cross-org with
+  // no such check, so the fold-in note doesn't special-case it either.
+  it('links the fold-in note even when the upstream is in a different GitHub org', () => {
+    const placement: PlacementResult = {
+      dropped: [],
+      unresolved: [],
+      allTags: [],
+      buckets: [{ tag: null, entries: [] }],
+    };
+    const foldIns = new Map([
+      [
+        null,
+        [{ repo: 'other-org/engine', fromVersion: '1.2.5', toVersion: '1.2.6', entries: [] }],
+      ],
+    ]);
+
+    const markdown = render(placement, OPTIONS, foldIns);
+
+    expect(markdown).toContain(
+      '_Includes [engine 1.2.5–1.2.6](https://github.com/other-org/engine/compare/1.2.5...1.2.6)._',
+    );
   });
 });
