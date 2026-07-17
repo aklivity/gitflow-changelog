@@ -108,13 +108,13 @@ describe('run — upstream fold-in wiring', () => {
 
     expect(result.markdown).toContain('## [v1.1.0]');
     expect(result.markdown).toContain('- Our own change [\\#500]');
-    expect(result.markdown).toContain('_Includes engine 1.2.5–1.2.6._');
+    expect(result.markdown).toContain('_Includes [engine 1.2.5–1.2.6](https://github.com/acme/engine/compare/1.2.5...1.2.6)._');
     expect(result.markdown).toContain(
       '- export telemetry events [acme/engine\\#2080](https://github.com/acme/engine/pull/2080)',
     );
 
     expect(result.markdown).toContain('## [v1.0.0]');
-    expect(result.markdown).toContain('_Includes engine up to 1.2.5._');
+    expect(result.markdown).toContain('_Includes [engine up to 1.2.5](https://github.com/acme/engine/tree/1.2.5)._');
     expect(result.markdown).toContain(
       '- fix crash [acme/engine\\#1990](https://github.com/acme/engine/pull/1990)',
     );
