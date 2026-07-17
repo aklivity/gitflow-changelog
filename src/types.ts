@@ -99,24 +99,29 @@ export const ExplicitUpstreamConfig = z.object({
 });
 export type ExplicitUpstreamConfig = z.infer<typeof ExplicitUpstreamConfig>;
 
-// repo/dependency-version-file/dependency-version-property above all
-// duplicate information the Maven ecosystem already publishes: which
-// property pins a groupId's version is discoverable from the consuming
-// repo's own poms (findGroupVersionSource in maven.ts), and the upstream's
-// own repo is discoverable from its published pom's <scm> block
-// (extractGithubRepo in registry.ts) — see resolveUpstreamConfig in run.ts.
-// `artifactId` here identifies which pom to fetch for that <scm> lookup
-// (the upstream's root/aggregator artifact); the version-discovery step
-// matches on `groupId` alone, since nothing depends on a bare aggregator
-// artifact directly.
-export const DiscoveredUpstreamConfig = z.object({
-  groupId: z.string(),
-  artifactId: z.string(),
-  classification: ClassificationLevel,
+// repo/dependency-version-file/dependency-version-property/classification
+// above all duplicate information the Maven ecosystem already publishes:
+// which property pins a groupId's version is discoverable from the
+// consuming repo's own poms (findGroupVersionSource in maven.ts), and the
+// upstream's own repo is discoverable from its published pom's <scm> block
+// (extractGithubRepo in registry.ts) — see resolveUpstreamConfig in
+// discover-upstream.ts. groupId/artifactId are meaningless outside a Maven
+// context, so they live nested under a `maven` key rather than as siblings
+// of a separate `classification` field — the key's own presence already
+// says "maven-level classification, fully derived," with nothing left to
+// redundantly spell out. `artifactId` identifies which pom to fetch for
+// the <scm> lookup (the upstream's root/aggregator artifact); the
+// version-discovery step matches on `groupId` alone, since nothing depends
+// on a bare aggregator artifact directly.
+export const MavenDiscoveredUpstreamConfig = z.object({
+  maven: z.object({
+    groupId: z.string(),
+    artifactId: z.string(),
+  }),
 });
-export type DiscoveredUpstreamConfig = z.infer<typeof DiscoveredUpstreamConfig>;
+export type MavenDiscoveredUpstreamConfig = z.infer<typeof MavenDiscoveredUpstreamConfig>;
 
-export const UpstreamConfig = z.union([ExplicitUpstreamConfig, DiscoveredUpstreamConfig]);
+export const UpstreamConfig = z.union([ExplicitUpstreamConfig, MavenDiscoveredUpstreamConfig]);
 export type UpstreamConfig = z.infer<typeof UpstreamConfig>;
 
 export interface DriverOptions {

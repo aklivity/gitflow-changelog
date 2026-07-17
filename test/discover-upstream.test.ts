@@ -26,7 +26,7 @@ describe('resolveUpstreamConfig', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  describe('discovered ({groupId, artifactId}) config', () => {
+  describe('maven-discovered ({maven: {groupId, artifactId}}) config', () => {
     let gitDir: string;
 
     beforeEach(async () => {
@@ -74,7 +74,7 @@ describe('resolveUpstreamConfig', () => {
         return '<project><scm><url>https://github.com/aklivity/zilla</url></scm></project>';
       });
 
-      const discovered: UpstreamConfig = { groupId: 'io.aklivity.zilla', artifactId: 'zilla', classification: 'maven' };
+      const discovered: UpstreamConfig = { maven: { groupId: 'io.aklivity.zilla', artifactId: 'zilla' } };
       const result = await resolveUpstreamConfig(discovered, gitDir);
 
       const expected: ExplicitUpstreamConfig = {
@@ -88,7 +88,7 @@ describe('resolveUpstreamConfig', () => {
     });
 
     it('skips with a warning when no dependency under the groupId has a property-form version', async () => {
-      const discovered: UpstreamConfig = { groupId: 'io.aklivity.nonexistent', artifactId: 'nonexistent', classification: 'maven' };
+      const discovered: UpstreamConfig = { maven: { groupId: 'io.aklivity.nonexistent', artifactId: 'nonexistent' } };
       const result = await resolveUpstreamConfig(discovered, gitDir);
 
       expect(result.config).toBeUndefined();
@@ -99,7 +99,7 @@ describe('resolveUpstreamConfig', () => {
     it('skips with a warning when the discovered pom has no github.com <scm>', async () => {
       vi.spyOn(registry, 'fetchPom').mockResolvedValue('<project><scm><url>https://gitlab.com/acme/engine</url></scm></project>');
 
-      const discovered: UpstreamConfig = { groupId: 'io.aklivity.zilla', artifactId: 'zilla', classification: 'maven' };
+      const discovered: UpstreamConfig = { maven: { groupId: 'io.aklivity.zilla', artifactId: 'zilla' } };
       const result = await resolveUpstreamConfig(discovered, gitDir);
 
       expect(result.config).toBeUndefined();
@@ -109,7 +109,7 @@ describe('resolveUpstreamConfig', () => {
     it('skips with a warning when the artifact pom fails to fetch entirely', async () => {
       vi.spyOn(registry, 'fetchPom').mockResolvedValue(undefined);
 
-      const discovered: UpstreamConfig = { groupId: 'io.aklivity.zilla', artifactId: 'zilla', classification: 'maven' };
+      const discovered: UpstreamConfig = { maven: { groupId: 'io.aklivity.zilla', artifactId: 'zilla' } };
       const result = await resolveUpstreamConfig(discovered, gitDir);
 
       expect(result.config).toBeUndefined();
