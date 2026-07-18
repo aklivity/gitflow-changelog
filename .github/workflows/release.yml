@@ -73,12 +73,15 @@ jobs:
           # matters; @v0/@v<version> consumers already work regardless of
           # whether the Release page exists yet.
           last_error=""
-          for attempt in 1 2 3; do
+          attempts=3
+          for attempt in $(seq 1 "$attempts"); do
             if last_error=$(gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes 2>&1); then
               exit 0
             fi
             echo "::warning::gh release create attempt ${attempt} failed for v${VERSION}: ${last_error//$'\n'/ }"
-            sleep $((attempt * 15))
+            if [ "$attempt" -lt "$attempts" ]; then
+              sleep $((attempt * 15))
+            fi
           done
 
           # gh api rate_limit is exempt from the very limits it reports, so
