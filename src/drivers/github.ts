@@ -280,6 +280,113 @@ export async function fetchPullRequestFiles(
   return filenames;
 }
 
+interface GithubRepo {
+  default_branch: string;
+}
+
+// Used by resolve.ts's squash-merge fallback tier to know which base ref
+// actually matters for the "was this feature branch squash-merged into the
+// real target?" search — a squash-merge PR's base is always the repo's
+// default branch, regardless of which branch (develop, support/1.x, ...) is
+// currently being generated a changelog for. Not cached by the caller since
+// it's fetched at most once per resolveHashes call, only when at least one
+// PR entry actually needs the squash-merge tier.
+export async function fetchDefaultBranch(owner: string, repo: string, token: string): Promise<string | undefined> {
+  const url = `${API_BASE}/repos/${owner}/${repo}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!response.ok)
+  {
+    return undefined;
+  }
+  const data = (await response.json()) as GithubRepo;
+  return data.default_branch;
+}
+
+interface GithubPullRequest {
+  base: { ref: string };
+}
+
+// Not part of /issues/events — a genuine extra per-item call, used lazily
+// by resolve.ts's squash-merge fallback tier only for PR entries that have
+// already failed every cheaper resolution tier. A merged PR's base ref
+// never changes, so callers cache the result permanently.
+export async function fetchPullRequestBaseRef(
+  owner: string,
+  repo: string,
+  number: number,
+  token: string,
+): Promise<string | undefined> {
+  const url = `${API_BASE}/repos/${owner}/${repo}/pulls/${number}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!response.ok)
+  {
+    return undefined;
+  }
+  const pr = (await response.json()) as GithubPullRequest;
+  return pr.base.ref;
+}
+
+interface GithubSearchIssue {
+  number: number;
+}
+
+interface GithubSearchResult {
+  items: GithubSearchIssue[];
+}
+
+// Resolves the "long-lived feature branch later squash-merged" case: finds
+// whichever PR merged `headRef` into `baseRef` (the branch being processed,
+// e.g. "develop"), so its number can be looked up in the same
+// commit-message history scan already run for every other entry (see
+// scanCommitsReferencingNumbers), instead of a second git operation.
+// GitHub's search index retains a merged PR's head/base branch names for
+// the PR's lifetime, even after the branches themselves are deleted.
+//
+// `base:` is required, not just `head:` — a long-lived feature branch is
+// typically built via a chain of PRs merged into *itself* (same head and
+// base ref) before it's finally squash-merged into the real target branch,
+// so `head:<headRef>` alone can match several merged PRs sharing that head
+// ref; only the one whose base is actually `baseRef` is the squash-merge.
+// Confirmed against the real aklivity/zilla history: searching bare
+// `head:feature/grpc-kafka` for PR #174 returns 5 merged PRs (#174, #187,
+// #199, #205, #225) that all share that head ref from being merged into
+// each other; adding `base:develop` narrows it to exactly #225.
+export async function findSquashMergePr(
+  owner: string,
+  repo: string,
+  headRef: string,
+  baseRef: string,
+  token: string,
+): Promise<number | undefined> {
+  const query = `repo:${owner}/${repo} type:pr is:merged head:${headRef} base:${baseRef}`;
+  const url = `${API_BASE}/search/issues?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!response.ok)
+  {
+    return undefined;
+  }
+  const result = (await response.json()) as GithubSearchResult;
+  return result.items[0]?.number;
+}
+
 export class GithubDriver implements Driver {
   private readonly cache: CacheFile;
 

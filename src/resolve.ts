@@ -1,4 +1,5 @@
-import type { HashFallback } from './cache.js';
+import type { HashFallback, SquashMergeCache } from './cache.js';
+import { fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr } from './drivers/github.js';
 import type { GitOptions } from './git.js';
 import { commitExists, scanCommitsReferencingNumbers } from './git.js';
 import type { HashOverrides } from './overrides.js';
@@ -11,6 +12,12 @@ export interface ResolveResult {
   warnings: string[];
 }
 
+export interface GithubContext {
+  owner: string;
+  repo: string;
+  token: string;
+}
+
 export interface ResolveInput {
   entries: Entry[];
   overrides: HashOverrides;
@@ -20,10 +27,109 @@ export interface ResolveInput {
   // `prFilesCache` in upstream.ts. Omit for a one-shot resolve with no
   // persistence (e.g. tests).
   hashFallbackCache?: Record<string, HashFallback>;
+  // Enables the tier-4 squash-merge fallback below — omit for a pure-local
+  // resolve (e.g. tests) with no GitHub API access.
+  github?: GithubContext;
+  squashMergeCache?: SquashMergeCache;
 }
 
 function fallbackCacheKey(entry: { number: number; kind: 'issue' | 'pr' }): string {
   return `${entry.kind}:${entry.number}`;
+}
+
+function emptySquashMergeCache(): SquashMergeCache {
+  return { prBaseRefs: {}, squashMergePrs: {} };
+}
+
+async function resolveBaseRef(entry: Entry, github: GithubContext, squashCache: SquashMergeCache): Promise<string | undefined> {
+  const key = String(entry.number);
+  const cached = squashCache.prBaseRefs[key];
+  if (cached)
+  {
+    return cached;
+  }
+  const baseRef = await fetchPullRequestBaseRef(github.owner, github.repo, entry.number, github.token);
+  if (baseRef)
+  {
+    squashCache.prBaseRefs[key] = baseRef;
+  }
+  return baseRef;
+}
+
+// A squash-merge PR's own base isn't reliably one branch or the other: it
+// might target `ref` directly (a feature branch squashed straight into the
+// maintenance branch being processed), or it might target the repo's
+// default branch with `ref` only inheriting the result via ancestry (the
+// confirmed aklivity/zilla case — feature/support-catalog-handler-validate
+// squashed into develop, later reachable from support/1.x too). Try `ref`
+// first — cheapest when `ref` already is the default branch, since that's
+// a single query — then fall back to `defaultBranch` only if that missed
+// and the two actually differ.
+async function resolveSquashMergePr(
+  baseRef: string,
+  ref: string,
+  defaultBranch: string,
+  github: GithubContext,
+  squashCache: SquashMergeCache,
+): Promise<number | undefined> {
+  const cached = squashCache.squashMergePrs[baseRef];
+  if (cached)
+  {
+    return cached;
+  }
+
+  const mergeTargets = ref === defaultBranch ? [ref] : [ref, defaultBranch];
+  for (const target of mergeTargets)
+  {
+    const prNumber = await findSquashMergePr(github.owner, github.repo, baseRef, target, github.token);
+    if (prNumber)
+    {
+      squashCache.squashMergePrs[baseRef] = prNumber;
+      return prNumber;
+    }
+  }
+  return undefined;
+}
+
+interface SquashMergeCandidate {
+  resolvedSha: string;
+  baseRef: string;
+  squashPrNumber: number;
+}
+
+// Only meaningful for PR entries: a PR merged into a long-lived feature
+// branch (base ref) that was itself later squash-merged has its own commit
+// permanently flattened away, but the squash-merge PR's number survives in
+// commit messages and is already present in referencingByNumber (the
+// single history scan tier 3 already ran) — so no second git operation is
+// needed here, only the GitHub lookups to find which number to look up.
+async function resolveViaSquashMerge(
+  entry: Entry,
+  ref: string,
+  defaultBranch: string,
+  github: GithubContext,
+  squashCache: SquashMergeCache,
+  referencingByNumber: Map<number, string[]>,
+): Promise<SquashMergeCandidate | undefined> {
+  const baseRef = await resolveBaseRef(entry, github, squashCache);
+  if (!baseRef || baseRef === ref || baseRef === defaultBranch)
+  {
+    return undefined;
+  }
+
+  const squashPrNumber = await resolveSquashMergePr(baseRef, ref, defaultBranch, github, squashCache);
+  if (!squashPrNumber)
+  {
+    return undefined;
+  }
+
+  const candidates = referencingByNumber.get(squashPrNumber) ?? [];
+  if (candidates.length !== 1)
+  {
+    return undefined;
+  }
+
+  return { resolvedSha: candidates[0], baseRef, squashPrNumber };
 }
 
 // §6: a recorded merge_commit_sha / closing commit_id can point at a commit
@@ -32,16 +138,26 @@ function fallbackCacheKey(entry: { number: number; kind: 'issue' | 'pr' }): stri
 // on its own as a legitimate drop. Resolution order, highest precedence
 // first: checked-in override → as-is if already valid → cached fallback
 // (revalidated, since a *further* rewrite could invalidate it) → a single
-// history scan shared by every entry still needing one → flagged unresolved.
+// history scan shared by every entry still needing one → a squash-merge
+// lookup for PR entries the scan didn't resolve → flagged unresolved.
 //
 // The scan itself (scanCommitsReferencingNumbers) runs at most once per
 // call, regardless of how many entries need it — see issue #13. Entries
 // resolved via cache or override never trigger it at all.
+//
+// Within a single call, once any entry's original sha resolves to a
+// replacement (via any tier), that mapping is reused for every other entry
+// recorded with the identical original sha — most commonly an issue and
+// the PR whose merge closed it, which always share a sha via
+// applyClosingReferences in drivers/github.ts. This lets an issue resolve
+// for free off its closing PR's squash-merge lookup, without needing (or
+// even being able, since issues have no base ref) a lookup of its own.
 export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions): Promise<ResolveResult> {
   const resolved: Entry[] = [];
-  const unresolved: UnresolvedEntry[] = [];
   const warnings: string[] = [];
   const cache = input.hashFallbackCache ?? {};
+  const squashCache = input.squashMergeCache ?? emptySquashMergeCache();
+  const resolvedShaThisRun = new Map<string, string>();
 
   const pending: Entry[] = [];
   for (const entry of input.entries)
@@ -68,6 +184,7 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
           `If this is wrong, add an explicit override for ${entry.sha} to the changelog-hash-overrides file.`,
       );
       resolved.push({ ...entry, sha: cached.resolvedSha });
+      resolvedShaThisRun.set(entry.sha, cached.resolvedSha);
       continue;
     }
 
@@ -78,6 +195,7 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
     ? await scanCommitsReferencingNumbers(input.ref, gitOptions)
     : new Map<number, string[]>();
 
+  const stillPending: Entry[] = [];
   for (const entry of pending)
   {
     const candidates = referencingByNumber.get(entry.number) ?? [];
@@ -91,10 +209,55 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
           'changelog-hash-overrides file.',
       );
       cache[fallbackCacheKey(entry)] = { originalSha: entry.sha, resolvedSha: candidate };
+      resolvedShaThisRun.set(entry.sha, candidate);
       resolved.push({ ...entry, sha: candidate });
       continue;
     }
 
+    stillPending.push(entry);
+  }
+
+  // Fetched at most once per call, and only if at least one PR entry could
+  // actually use it — most runs never reach tier 4 at all.
+  const defaultBranch = input.github && stillPending.some((entry) => entry.kind === 'pr')
+    ? await fetchDefaultBranch(input.github.owner, input.github.repo, input.github.token)
+    : undefined;
+
+  const unresolvedCandidates: Entry[] = [];
+  for (const entry of stillPending)
+  {
+    if (input.github && defaultBranch && entry.kind === 'pr')
+    {
+      const squashCandidate = await resolveViaSquashMerge(entry, input.ref, defaultBranch, input.github, squashCache, referencingByNumber);
+      if (squashCandidate)
+      {
+        warnings.push(
+          `${entry.kind} #${entry.number}: recorded commit ${entry.sha} does not exist in this repository ` +
+            `(likely squash-merged via a long-lived branch); auto-substituted ${squashCandidate.resolvedSha}, found ` +
+            `via the squash-merge of base branch "${squashCandidate.baseRef}" in #${squashCandidate.squashPrNumber}. ` +
+            `If this is wrong, add an explicit override for ${entry.sha} to the changelog-hash-overrides file.`,
+        );
+        cache[fallbackCacheKey(entry)] = { originalSha: entry.sha, resolvedSha: squashCandidate.resolvedSha };
+        resolvedShaThisRun.set(entry.sha, squashCandidate.resolvedSha);
+        resolved.push({ ...entry, sha: squashCandidate.resolvedSha });
+        continue;
+      }
+    }
+
+    unresolvedCandidates.push(entry);
+  }
+
+  const unresolved: UnresolvedEntry[] = [];
+  for (const entry of unresolvedCandidates)
+  {
+    const reusedSha = resolvedShaThisRun.get(entry.sha);
+    if (reusedSha)
+    {
+      resolved.push({ ...entry, sha: reusedSha });
+      continue;
+    }
+
+    const candidates = referencingByNumber.get(entry.number) ?? [];
     const reason = candidates.length === 0 ? 'not-found-anywhere' : 'ambiguous-candidates';
     const candidateDescription = candidates.length === 0
       ? 'no candidate commit references it'

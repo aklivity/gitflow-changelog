@@ -156,9 +156,31 @@ Resolution order, highest precedence first:
 3. **Heuristic auto-detection** — search local commit messages for a
    reference to the same PR/issue number. If exactly one reachable candidate
    is found, it's used, with a visible warning naming the substitution.
-4. **Flagged unresolved** — zero or multiple ambiguous candidates: the entry
-   is dropped and a warning names the PR/issue and the unresolvable SHA, so a
-   human can add an explicit override.
+4. **Squash-merge discovery** (PR entries only) — covers a PR merged into a
+   long-lived feature branch (e.g. `feature/grpc-kafka`) that was itself
+   later squash-merged, which flattens the PR's own commit away entirely.
+   Fetches the PR's base ref, then searches GitHub for whichever PR
+   squash-merged that base ref into a real branch — trying the branch
+   currently being processed first (the feature branch may have been
+   squashed directly into it), then falling back to the repo's actual
+   default branch if that misses (the feature branch may instead have been
+   squashed into develop, with the branch being processed only inheriting
+   the result via ancestry — confirmed against real aklivity/zilla history:
+   `feature/support-catalog-handler-validate` was squashed into `develop`
+   via #1606, yet is also correctly resolved when generating `support/1.x`'s
+   changelog). Once the right squash-merge PR is found, checks whether
+   *its* number is referenced in local commit messages (reusing the same
+   history scan from tier 3 — no extra git operation, and no risk of a
+   false positive: that scan only ever contains commits reachable from the
+   branch being processed, so a squash-merge that never reached this branch
+   correctly yields zero candidates). An issue closed by a PR resolved this
+   way is fixed for free in the same run, since it shares that PR's exact
+   broken sha. Discovered base refs and squash-merge PR numbers are cached
+   permanently (both are immutable once merged), so this only costs GitHub
+   API calls once per affected PR/branch, not on every run.
+5. **Flagged unresolved** — zero or multiple ambiguous candidates at any
+   tier: the entry is dropped and a warning names the PR/issue and the
+   unresolvable SHA, so a human can add an explicit override.
 
 ## Known limitations
 

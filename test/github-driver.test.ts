@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyCache } from '../src/cache.js';
-import { applyClosingReferences, applyEvent, entriesFromCache } from '../src/drivers/github.js';
+import { applyClosingReferences, applyEvent, entriesFromCache, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr } from '../src/drivers/github.js';
 import type { DriverOptions } from '../src/types.js';
 
 const OPTIONS: DriverOptions = {
@@ -259,5 +259,83 @@ describe('applyClosingReferences', () => {
 
     expect(() => applyClosingReferences(cache, [mergedEvent])).not.toThrow();
     expect(cache.entries['924']).toBeUndefined();
+  });
+});
+
+function jsonResponse(status: number, body: unknown): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+}
+
+describe('fetchPullRequestBaseRef', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the base ref on a 2xx response', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { base: { ref: 'feature/grpc-kafka' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const baseRef = await fetchPullRequestBaseRef('aklivity', 'zilla', 174, 'token');
+
+    expect(baseRef).toBe('feature/grpc-kafka');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/repos/aklivity/zilla/pulls/174',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token' }) }),
+    );
+  });
+
+  it('returns undefined on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, {})));
+    expect(await fetchPullRequestBaseRef('aklivity', 'zilla', 999999, 'token')).toBeUndefined();
+  });
+});
+
+describe('findSquashMergePr', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the number of the first matching merged PR, filtering by both head and base', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse(200, { items: [{ number: 225 }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const prNumber = await findSquashMergePr('aklivity', 'zilla', 'feature/grpc-kafka', 'develop', 'token');
+
+    expect(prNumber).toBe(225);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('search/issues?q=');
+    expect(decodeURIComponent(url)).toContain('repo:aklivity/zilla type:pr is:merged head:feature/grpc-kafka base:develop');
+  });
+
+  it('returns undefined when no PR matches', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { items: [] })));
+    expect(await findSquashMergePr('aklivity', 'zilla', 'feature/never-merged', 'develop', 'token')).toBeUndefined();
+  });
+
+  it('returns undefined on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, {})));
+    expect(await findSquashMergePr('aklivity', 'zilla', 'feature/grpc-kafka', 'develop', 'token')).toBeUndefined();
+  });
+});
+
+describe('fetchDefaultBranch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the default branch on a 2xx response', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { default_branch: 'develop' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await fetchDefaultBranch('aklivity', 'zilla', 'token')).toBe('develop');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/repos/aklivity/zilla',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token' }) }),
+    );
+  });
+
+  it('returns undefined on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, {})));
+    expect(await fetchDefaultBranch('aklivity', 'nonexistent', 'token')).toBeUndefined();
   });
 });
