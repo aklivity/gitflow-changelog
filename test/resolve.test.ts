@@ -266,20 +266,22 @@ describe('resolveHashes', () => {
       expect(result.unresolved).toHaveLength(1);
     });
 
-    // Confirmed against the real aklivity/zilla history: a squash-merge
-    // PR's base is always the repo's actual default branch (develop), even
-    // when generating the changelog for a maintenance branch that merely
-    // inherited the same squash commit via ancestry. Comparing against
-    // `ref` (support/1.x here) instead of the real default branch would
-    // wrongly search `base:support/1.x` and find nothing.
-    it('still resolves via the default branch when ref is a maintenance branch, not develop', async () => {
+    // Confirmed against the real aklivity/zilla history: PR #1604/#1606 —
+    // the squash-merge PR's base was `develop`, yet the resulting commit is
+    // also reachable from `support/1.x` via ancestry. Searching only
+    // `base:support/1.x` here would find nothing, so `ref` is tried first
+    // (cheap, matches the "squashed directly into the branch being
+    // processed" case) and `defaultBranch` is a fallback, not the only
+    // target.
+    it('falls back to the default branch when the squash-merge PR was actually based there, not on ref', async () => {
       await fixture.commit('base');
       const squashCommit = await fixture.commit('grpc-kafka feature baseline (#225)');
       await fixture.branch('support/1.x');
 
       vi.spyOn(githubModule, 'fetchDefaultBranch').mockResolvedValue('develop');
       vi.spyOn(githubModule, 'fetchPullRequestBaseRef').mockResolvedValue('feature/grpc-kafka');
-      const searchSpy = vi.spyOn(githubModule, 'findSquashMergePr').mockResolvedValue(225);
+      const searchSpy = vi.spyOn(githubModule, 'findSquashMergePr')
+        .mockImplementation(async (_owner, _repo, _headRef, target) => (target === 'develop' ? 225 : undefined));
 
       const result = await resolveHashes(
         { entries: [pr(174, DEAD_SHA)], overrides: EMPTY_OVERRIDES, ref: 'support/1.x', github: GITHUB },
@@ -287,7 +289,57 @@ describe('resolveHashes', () => {
       );
 
       expect(result.resolved).toEqual([pr(174, squashCommit)]);
-      expect(searchSpy).toHaveBeenCalledWith('aklivity', 'zilla', 'feature/grpc-kafka', 'develop', 'token');
+      expect(searchSpy).toHaveBeenNthCalledWith(1, 'aklivity', 'zilla', 'feature/grpc-kafka', 'support/1.x', 'token');
+      expect(searchSpy).toHaveBeenNthCalledWith(2, 'aklivity', 'zilla', 'feature/grpc-kafka', 'develop', 'token');
+    });
+
+    // The mirror image: a feature branch squashed directly into the
+    // maintenance branch being processed, never merged into develop at
+    // all. `ref` is tried first, so this resolves in a single search call
+    // with no unnecessary fallback to defaultBranch.
+    it('resolves via ref directly when the squash-merge PR was based on ref itself, not the default branch', async () => {
+      await fixture.commit('base');
+      const squashCommit = await fixture.commit('hotfix baseline (#310)');
+      await fixture.branch('support/1.x');
+
+      vi.spyOn(githubModule, 'fetchDefaultBranch').mockResolvedValue('develop');
+      vi.spyOn(githubModule, 'fetchPullRequestBaseRef').mockResolvedValue('feature/hotfix');
+      const searchSpy = vi.spyOn(githubModule, 'findSquashMergePr')
+        .mockImplementation(async (_owner, _repo, _headRef, target) => (target === 'support/1.x' ? 310 : undefined));
+
+      const result = await resolveHashes(
+        { entries: [pr(300, DEAD_SHA)], overrides: EMPTY_OVERRIDES, ref: 'support/1.x', github: GITHUB },
+        { cwd: fixture.dir },
+      );
+
+      expect(result.resolved).toEqual([pr(300, squashCommit)]);
+      expect(searchSpy).toHaveBeenCalledTimes(1);
+      expect(searchSpy).toHaveBeenCalledWith('aklivity', 'zilla', 'feature/hotfix', 'support/1.x', 'token');
+    });
+
+    // The false-positive concern this design guards against: a squash-merge
+    // that only ever happened relative to support/1.x must not leak into
+    // develop's changelog. `defaultBranch` is `develop` here too, so the
+    // search now tries `base:develop` (matching `ref`) first, finds
+    // nothing (the real PR's base was support/1.x), and there is no second
+    // target to fall back to since ref === defaultBranch — correctly
+    // unresolved rather than incorrectly substituted.
+    it('does not leak a squash-merge based on a different branch into develop\'s changelog', async () => {
+      await fixture.commit('base');
+
+      vi.spyOn(githubModule, 'fetchDefaultBranch').mockResolvedValue('develop');
+      vi.spyOn(githubModule, 'fetchPullRequestBaseRef').mockResolvedValue('feature/hotfix');
+      const searchSpy = vi.spyOn(githubModule, 'findSquashMergePr')
+        .mockImplementation(async (_owner, _repo, _headRef, target) => (target === 'support/1.x' ? 310 : undefined));
+
+      const result = await resolveHashes(
+        { entries: [pr(300, DEAD_SHA)], overrides: EMPTY_OVERRIDES, ref: 'develop', github: GITHUB },
+        { cwd: fixture.dir },
+      );
+
+      expect(result.resolved).toEqual([]);
+      expect(result.unresolved).toHaveLength(1);
+      expect(searchSpy).toHaveBeenCalledTimes(1);
     });
 
     it('leaves the entry unresolved when no squash-merge PR is found', async () => {

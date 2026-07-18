@@ -56,8 +56,18 @@ async function resolveBaseRef(entry: Entry, github: GithubContext, squashCache: 
   return baseRef;
 }
 
+// A squash-merge PR's own base isn't reliably one branch or the other: it
+// might target `ref` directly (a feature branch squashed straight into the
+// maintenance branch being processed), or it might target the repo's
+// default branch with `ref` only inheriting the result via ancestry (the
+// confirmed aklivity/zilla case — feature/support-catalog-handler-validate
+// squashed into develop, later reachable from support/1.x too). Try `ref`
+// first — cheapest when `ref` already is the default branch, since that's
+// a single query — then fall back to `defaultBranch` only if that missed
+// and the two actually differ.
 async function resolveSquashMergePr(
   baseRef: string,
+  ref: string,
   defaultBranch: string,
   github: GithubContext,
   squashCache: SquashMergeCache,
@@ -67,12 +77,18 @@ async function resolveSquashMergePr(
   {
     return cached;
   }
-  const prNumber = await findSquashMergePr(github.owner, github.repo, baseRef, defaultBranch, github.token);
-  if (prNumber)
+
+  const mergeTargets = ref === defaultBranch ? [ref] : [ref, defaultBranch];
+  for (const target of mergeTargets)
   {
-    squashCache.squashMergePrs[baseRef] = prNumber;
+    const prNumber = await findSquashMergePr(github.owner, github.repo, baseRef, target, github.token);
+    if (prNumber)
+    {
+      squashCache.squashMergePrs[baseRef] = prNumber;
+      return prNumber;
+    }
   }
-  return prNumber;
+  return undefined;
 }
 
 interface SquashMergeCandidate {
@@ -82,32 +98,26 @@ interface SquashMergeCandidate {
 }
 
 // Only meaningful for PR entries: a PR merged into a long-lived feature
-// branch (base ref) that was itself later squash-merged into the repo's
-// default branch has its own commit permanently flattened away, but the
-// squash-merge PR's number survives in commit messages and is already
-// present in referencingByNumber (the single history scan tier 3 already
-// ran) — so no second git operation is needed here, only the GitHub
-// lookups to find which number to look up.
-//
-// Compares against `defaultBranch`, not the `ref` currently being
-// processed — a squash-merge PR's own base is always the repo's actual
-// default branch (develop), regardless of whether this call is generating
-// a changelog for develop or for a maintenance branch like support/1.x
-// that inherited the same squash commit via ancestry.
+// branch (base ref) that was itself later squash-merged has its own commit
+// permanently flattened away, but the squash-merge PR's number survives in
+// commit messages and is already present in referencingByNumber (the
+// single history scan tier 3 already ran) — so no second git operation is
+// needed here, only the GitHub lookups to find which number to look up.
 async function resolveViaSquashMerge(
   entry: Entry,
+  ref: string,
   defaultBranch: string,
   github: GithubContext,
   squashCache: SquashMergeCache,
   referencingByNumber: Map<number, string[]>,
 ): Promise<SquashMergeCandidate | undefined> {
   const baseRef = await resolveBaseRef(entry, github, squashCache);
-  if (!baseRef || baseRef === defaultBranch)
+  if (!baseRef || baseRef === ref || baseRef === defaultBranch)
   {
     return undefined;
   }
 
-  const squashPrNumber = await resolveSquashMergePr(baseRef, defaultBranch, github, squashCache);
+  const squashPrNumber = await resolveSquashMergePr(baseRef, ref, defaultBranch, github, squashCache);
   if (!squashPrNumber)
   {
     return undefined;
@@ -218,7 +228,7 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
   {
     if (input.github && defaultBranch && entry.kind === 'pr')
     {
-      const squashCandidate = await resolveViaSquashMerge(entry, defaultBranch, input.github, squashCache, referencingByNumber);
+      const squashCandidate = await resolveViaSquashMerge(entry, input.ref, defaultBranch, input.github, squashCache, referencingByNumber);
       if (squashCandidate)
       {
         warnings.push(
