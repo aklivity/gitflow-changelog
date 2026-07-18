@@ -1,6 +1,6 @@
 {
   "name": "gitflow-changelog",
-  "version": "1.0.0",
+  "version": "0.5.2",
   "description": "Gitflow-aware changelog generator, packaged as a GitHub Action",
   "license": "Apache-2.0",
   "type": "module",
