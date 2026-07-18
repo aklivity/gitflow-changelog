@@ -190,4 +190,74 @@ describe('run — upstream fold-in wiring', () => {
     expect(upstreamWarning).toContain('issue #9999');
     expect(upstreamWarning).toContain('dropping this entry');
   });
+
+  // See issue #33: computeUpstreamFoldIn used to hardcode overrides to
+  // EMPTY_OVERRIDES, so a checked-in override committed to the upstream
+  // repo itself — the highest-precedence resolution tier for the
+  // upstream's own history — was silently ignored during fold-in.
+  it('honors the upstream repo\'s own checked-in hash-overrides file during fold-in resolution', async () => {
+    const upstreamShaAt125 = await upstream.commit('feature A');
+    await upstream.tag('1.2.5', '2024-01-01T00:00:00Z');
+
+    await writeFile(
+      join(upstream.dir, '.gitflow-changelog-hash-overrides.yml'),
+      `hash-overrides:\n  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef: ${upstreamShaAt125}\n`,
+      'utf8',
+    );
+    await execFileAsync('git', ['add', '.gitflow-changelog-hash-overrides.yml'], { cwd: upstream.dir });
+    await execFileAsync('git', ['commit', '-m', 'add overrides'], { cwd: upstream.dir });
+
+    await writePom(consumer.dir, '1.2.5');
+    const consumerSha = await consumer.commit('bump to 1.2.5');
+    await consumer.tag('v1.0.0', '2024-01-05T00:00:00Z');
+
+    const ownEntry = entry({ number: 500, title: 'Our own change', sha: consumerSha });
+    // Recorded sha is bogus — only resolvable via the override above, not
+    // any fallback tier (it doesn't exist, and no commit message anywhere
+    // references #3010).
+    const overriddenUpstreamEntry = entry({
+      number: 3010,
+      title: 'export events via override',
+      sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    });
+
+    vi.spyOn(GithubDriver.prototype, 'fetchEntries').mockImplementation(async (options) => {
+      if (options.repo === 'app') return [ownEntry];
+      if (options.repo === 'engine') return [overriddenUpstreamEntry];
+      return [];
+    });
+    vi.spyOn(gitModule, 'cloneOrUpdateRepo').mockImplementation(async (_owner, _repo, dir) => {
+      await execFileAsync('git', ['clone', '--quiet', upstream.dir, dir]);
+    });
+
+    const result = await run({
+      owner: 'acme',
+      repo: 'app',
+      token: 't',
+      ref: 'develop',
+      gitDir: consumer.dir,
+      cachePath: join(consumer.dir, '.gitflow-changelog-cache.json'),
+      upstreamCacheDir,
+      tagPattern: /^v\d+\.\d+\.\d+$/,
+      enhancementLabels: ['enhancement'],
+      bugLabels: ['bug'],
+      excludeLabels: [],
+      format: 'default',
+      upstream: [
+        {
+          repo: 'acme/engine',
+          'dependency-version-file': 'pom.xml',
+          'dependency-version-property': 'engine.version',
+          classification: 'none',
+        },
+      ],
+    });
+
+    expect(result.markdown).toContain(
+      '- export events via override [acme/engine\\#3010](https://github.com/acme/engine/pull/3010)',
+    );
+    // The override resolves this silently at the highest-precedence tier —
+    // no fallback-tier warning should ever fire for it.
+    expect(result.warnings.some((warning) => warning.includes('#3010'))).toBe(false);
+  });
 });

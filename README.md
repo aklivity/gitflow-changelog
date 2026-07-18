@@ -145,7 +145,12 @@ Resolution order, highest precedence first:
    broken sha, with no need to enumerate every affected PR/issue number by
    hand. Auto-loaded from `.gitflow-changelog-hash-overrides.yml` if
    present — no workflow changes needed; override the path via the
-   `overrides-path` input only if you want a different filename:
+   `overrides-path` input only if you want a different filename. When
+   resolving an `upstream` dependency's own history for fold-in, that
+   upstream's own `.gitflow-changelog-hash-overrides.yml` (from its clone)
+   is what's read — not the consuming repo's, and not configurable via
+   `overrides-path` (which only applies to the consuming repo's own
+   resolution):
 
    ```yaml
    hash-overrides:
