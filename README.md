@@ -156,9 +156,21 @@ Resolution order, highest precedence first:
 3. **Heuristic auto-detection** — search local commit messages for a
    reference to the same PR/issue number. If exactly one reachable candidate
    is found, it's used, with a visible warning naming the substitution.
-4. **Flagged unresolved** — zero or multiple ambiguous candidates: the entry
-   is dropped and a warning names the PR/issue and the unresolvable SHA, so a
-   human can add an explicit override.
+4. **Squash-merge discovery** (PR entries only) — covers a PR merged into a
+   long-lived feature branch (e.g. `feature/grpc-kafka`) that was itself
+   later squash-merged into the branch being processed, which flattens the
+   PR's own commit away entirely. Fetches the PR's base ref, searches GitHub
+   for whichever PR squash-merged that base ref into the default branch, and
+   checks whether *that* PR's number is referenced in local commit messages
+   (reusing the same history scan from tier 3 — no extra git operation). An
+   issue closed by a PR resolved this way is fixed for free in the same run,
+   since it shares that PR's exact broken sha. Discovered base refs and
+   squash-merge PR numbers are cached permanently (both are immutable once
+   merged), so this only costs GitHub API calls once per affected PR/branch,
+   not on every run.
+5. **Flagged unresolved** — zero or multiple ambiguous candidates at any
+   tier: the entry is dropped and a warning names the PR/issue and the
+   unresolvable SHA, so a human can add an explicit override.
 
 ## Known limitations
 

@@ -39,11 +39,38 @@ const CacheFileSchema = z.object({
   // is only trusted when it still matches the currently-recorded sha for
   // that entry. Optional + defaulted, same rationale as `prFiles`.
   hashFallbacks: z.record(z.string(), HashFallbackSchema).optional().default({}),
+  // Keyed by PR number. A merged PR's base ref never changes once merged,
+  // so — like prFiles — this only ever grows and needs no invalidation.
+  // Discovered lazily, one GitHub API call the first time a given PR
+  // number needs it, by resolve.ts's squash-merge fallback tier.
+  prBaseRefs: z.record(z.string(), z.string()).optional().default({}),
+  // Keyed by base ref name: the PR number that merged that ref into the
+  // repo's default branch, discovered via GitHub search the first time a
+  // given base ref needs it. Also permanent once merged. Resolves the
+  // "long-lived feature branch later squash-merged" case, where a PR
+  // merged into that branch has its own commit permanently flattened
+  // away, but the squash-merge PR's number is still referenceable in the
+  // same commit-message history scan already run for every entry.
+  squashMergePrs: z.record(z.string(), z.number()).optional().default({}),
 });
 export type CacheFile = z.infer<typeof CacheFileSchema>;
 
+// The slice of CacheFile that resolve.ts's squash-merge fallback tier
+// reads and mutates — passing the two fields directly (not a clone) lets
+// callers pass cache.prBaseRefs/cache.squashMergePrs straight through and
+// have discoveries land back in the same CacheFile object they'll save.
+export type SquashMergeCache = Pick<CacheFile, 'prBaseRefs' | 'squashMergePrs'>;
+
 export function emptyCache(): CacheFile {
-  return { schemaVersion: CACHE_SCHEMA_VERSION, lastEventId: 0, entries: {}, prFiles: {}, hashFallbacks: {} };
+  return {
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    lastEventId: 0,
+    entries: {},
+    prFiles: {},
+    hashFallbacks: {},
+    prBaseRefs: {},
+    squashMergePrs: {},
+  };
 }
 
 export async function loadCache(path: string): Promise<CacheFile> {

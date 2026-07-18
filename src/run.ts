@@ -113,7 +113,14 @@ async function computeUpstreamFoldIn(
   const upstreamEntries = await upstreamDriver.fetchEntries(upstreamDriverOptions);
 
   const { resolved: upstreamResolved } = await resolveHashes(
-    { entries: upstreamEntries, overrides: EMPTY_OVERRIDES, ref: 'HEAD', hashFallbackCache: upstreamCache.hashFallbacks },
+    {
+      entries: upstreamEntries,
+      overrides: EMPTY_OVERRIDES,
+      ref: 'HEAD',
+      hashFallbackCache: upstreamCache.hashFallbacks,
+      github: { owner: upstreamOwner, repo: upstreamRepo, token: options.token },
+      squashMergeCache: { prBaseRefs: upstreamCache.prBaseRefs, squashMergePrs: upstreamCache.squashMergePrs },
+    },
     { cwd: upstreamDir },
   );
 
@@ -175,15 +182,23 @@ export async function run(options: RunOptions): Promise<RunResult> {
 
   const overrides = await loadOverrides(options.overridesPath);
   const { resolved, unresolved, warnings } = await resolveHashes(
-    { entries, overrides, ref: options.ref, hashFallbackCache: cache.hashFallbacks },
+    {
+      entries,
+      overrides,
+      ref: options.ref,
+      hashFallbackCache: cache.hashFallbacks,
+      github: { owner: options.owner, repo: options.repo, token: options.token },
+      squashMergeCache: { prBaseRefs: cache.prBaseRefs, squashMergePrs: cache.squashMergePrs },
+    },
     { cwd: options.gitDir },
   );
 
   // Re-saved here (in addition to the earlier save right after
-  // fetchEntries) because resolveHashes mutates cache.hashFallbacks in
-  // place as it discovers history-rewrite substitutions — those need to
-  // reach disk too, not just the entries/lastEventId snapshot taken before
-  // resolution ran.
+  // fetchEntries) because resolveHashes mutates cache.hashFallbacks,
+  // cache.prBaseRefs, and cache.squashMergePrs in place as it discovers
+  // history-rewrite/squash-merge substitutions — those need to reach disk
+  // too, not just the entries/lastEventId snapshot taken before resolution
+  // ran.
   await saveCache(options.cachePath, cache);
 
   const placement = await place(
