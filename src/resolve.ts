@@ -1,5 +1,5 @@
 import type { HashFallback, SquashMergeCache } from './cache.js';
-import { fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr } from './drivers/github.js';
+import { fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr, GithubRateLimitError } from './drivers/github.js';
 import type { GitOptions } from './git.js';
 import { commitExists, scanCommitsReferencingNumbers } from './git.js';
 import type { HashOverrides } from './overrides.js';
@@ -219,32 +219,77 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
 
   // Fetched at most once per call, and only if at least one PR entry could
   // actually use it — most runs never reach tier 4 at all.
-  const defaultBranch = input.github && stillPending.some((entry) => entry.kind === 'pr')
-    ? await fetchDefaultBranch(input.github.owner, input.github.repo, input.github.token)
-    : undefined;
+  //
+  // `rateLimited` short-circuits the rest of tier 4 for this call the
+  // moment GitHub signals rate-limit exhaustion (GithubRateLimitError) —
+  // silently continuing to attempt lookups per remaining entry would (a)
+  // report a false "no candidate commit references it" for every one of
+  // them, when the real reason is "we couldn't check," and (b) keep
+  // spending calls against an already-exhausted quota. Anything already
+  // written into `squashCache`/`cache` before the limit was hit stays
+  // there — the caller's persisted cache file only grows more useful for
+  // the next run, it's never rolled back.
+  let rateLimited = false;
+  let defaultBranch: string | undefined;
+  if (input.github && stillPending.some((entry) => entry.kind === 'pr'))
+  {
+    try
+    {
+      defaultBranch = await fetchDefaultBranch(input.github.owner, input.github.repo, input.github.token);
+    }
+    catch (error)
+    {
+      if (!(error instanceof GithubRateLimitError))
+      {
+        throw error;
+      }
+      rateLimited = true;
+    }
+  }
 
   const unresolvedCandidates: Entry[] = [];
   for (const entry of stillPending)
   {
-    if (input.github && defaultBranch && entry.kind === 'pr')
+    if (!rateLimited && input.github && defaultBranch && entry.kind === 'pr')
     {
-      const squashCandidate = await resolveViaSquashMerge(entry, input.ref, defaultBranch, input.github, squashCache, referencingByNumber);
-      if (squashCandidate)
+      try
       {
-        warnings.push(
-          `${entry.kind} #${entry.number}: recorded commit ${entry.sha} does not exist in this repository ` +
-            `(likely squash-merged via a long-lived branch); auto-substituted ${squashCandidate.resolvedSha}, found ` +
-            `via the squash-merge of base branch "${squashCandidate.baseRef}" in #${squashCandidate.squashPrNumber}. ` +
-            `If this is wrong, add an explicit override for ${entry.sha} to the changelog-hash-overrides file.`,
-        );
-        cache[fallbackCacheKey(entry)] = { originalSha: entry.sha, resolvedSha: squashCandidate.resolvedSha };
-        resolvedShaThisRun.set(entry.sha, squashCandidate.resolvedSha);
-        resolved.push({ ...entry, sha: squashCandidate.resolvedSha });
-        continue;
+        const squashCandidate = await resolveViaSquashMerge(entry, input.ref, defaultBranch, input.github, squashCache, referencingByNumber);
+        if (squashCandidate)
+        {
+          warnings.push(
+            `${entry.kind} #${entry.number}: recorded commit ${entry.sha} does not exist in this repository ` +
+              `(likely squash-merged via a long-lived branch); auto-substituted ${squashCandidate.resolvedSha}, found ` +
+              `via the squash-merge of base branch "${squashCandidate.baseRef}" in #${squashCandidate.squashPrNumber}. ` +
+              `If this is wrong, add an explicit override for ${entry.sha} to the changelog-hash-overrides file.`,
+          );
+          cache[fallbackCacheKey(entry)] = { originalSha: entry.sha, resolvedSha: squashCandidate.resolvedSha };
+          resolvedShaThisRun.set(entry.sha, squashCandidate.resolvedSha);
+          resolved.push({ ...entry, sha: squashCandidate.resolvedSha });
+          continue;
+        }
+      }
+      catch (error)
+      {
+        if (!(error instanceof GithubRateLimitError))
+        {
+          throw error;
+        }
+        rateLimited = true;
       }
     }
 
     unresolvedCandidates.push(entry);
+  }
+
+  if (rateLimited)
+  {
+    warnings.push(
+      'GitHub API rate limit hit while resolving squash-merge fallbacks; skipping this tier for the rest of this ' +
+        'run rather than reporting the remaining entries as unresolvable. Any base refs and squash-merge PR ' +
+        'numbers already discovered this run are still cached, so the next run resumes from there instead of ' +
+        'starting over.',
+    );
   }
 
   const unresolved: UnresolvedEntry[] = [];

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyCache } from '../src/cache.js';
-import { applyClosingReferences, applyEvent, entriesFromCache, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr } from '../src/drivers/github.js';
+import { applyClosingReferences, applyEvent, entriesFromCache, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr, GithubRateLimitError } from '../src/drivers/github.js';
 import type { DriverOptions } from '../src/types.js';
 
 const OPTIONS: DriverOptions = {
@@ -262,8 +262,16 @@ describe('applyClosingReferences', () => {
   });
 });
 
-function jsonResponse(status: number, body: unknown): Response {
-  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return { ok: status >= 200 && status < 300, status, headers: new Headers(headers), json: async () => body } as Response;
+}
+
+function primaryRateLimitResponse(): Response {
+  return jsonResponse(403, { message: 'API rate limit exceeded' }, { 'x-ratelimit-remaining': '0' });
+}
+
+function secondaryRateLimitResponse(): Response {
+  return jsonResponse(403, { message: 'You have exceeded a secondary rate limit' }, { 'retry-after': '60' });
 }
 
 describe('fetchPullRequestBaseRef', () => {
@@ -287,6 +295,21 @@ describe('fetchPullRequestBaseRef', () => {
   it('returns undefined on a non-2xx response', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, {})));
     expect(await fetchPullRequestBaseRef('aklivity', 'zilla', 999999, 'token')).toBeUndefined();
+  });
+
+  it('throws GithubRateLimitError on a primary rate-limit response, not undefined', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => primaryRateLimitResponse()));
+    await expect(fetchPullRequestBaseRef('aklivity', 'zilla', 174, 'token')).rejects.toThrow(GithubRateLimitError);
+  });
+
+  it('throws GithubRateLimitError on a secondary (abuse-detection) rate-limit response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => secondaryRateLimitResponse()));
+    await expect(fetchPullRequestBaseRef('aklivity', 'zilla', 174, 'token')).rejects.toThrow(GithubRateLimitError);
+  });
+
+  it('throws GithubRateLimitError on a 429', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, {})));
+    await expect(fetchPullRequestBaseRef('aklivity', 'zilla', 174, 'token')).rejects.toThrow(GithubRateLimitError);
   });
 });
 
@@ -312,9 +335,14 @@ describe('findSquashMergePr', () => {
     expect(await findSquashMergePr('aklivity', 'zilla', 'feature/never-merged', 'develop', 'token')).toBeUndefined();
   });
 
-  it('returns undefined on a non-2xx response', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, {})));
+  it('returns undefined on an ordinary 403 (e.g. token lacks scope), not a rate-limit shape', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { message: 'Resource not accessible by integration' })));
     expect(await findSquashMergePr('aklivity', 'zilla', 'feature/grpc-kafka', 'develop', 'token')).toBeUndefined();
+  });
+
+  it('throws GithubRateLimitError on a rate-limit response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => primaryRateLimitResponse()));
+    await expect(findSquashMergePr('aklivity', 'zilla', 'feature/grpc-kafka', 'develop', 'token')).rejects.toThrow(GithubRateLimitError);
   });
 });
 
@@ -337,5 +365,10 @@ describe('fetchDefaultBranch', () => {
   it('returns undefined on a non-2xx response', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, {})));
     expect(await fetchDefaultBranch('aklivity', 'nonexistent', 'token')).toBeUndefined();
+  });
+
+  it('throws GithubRateLimitError on a rate-limit response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => primaryRateLimitResponse()));
+    await expect(fetchDefaultBranch('aklivity', 'zilla', 'token')).rejects.toThrow(GithubRateLimitError);
   });
 });

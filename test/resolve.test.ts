@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GithubRateLimitError } from '../src/drivers/github.js';
 import * as githubModule from '../src/drivers/github.js';
 import * as gitModule from '../src/git.js';
 import { EMPTY_OVERRIDES } from '../src/overrides.js';
@@ -453,6 +454,96 @@ describe('resolveHashes', () => {
       expect(result.resolved).toEqual([pr(174, squashCommit)]);
       expect(baseRefSpy).not.toHaveBeenCalled();
       expect(searchSpy).not.toHaveBeenCalled();
+    });
+
+    describe('rate limiting', () => {
+      it('stops attempting further lookups after a rate limit hit mid-loop, with a single clear warning', async () => {
+        await fixture.commit('base');
+
+        vi.spyOn(githubModule, 'fetchDefaultBranch').mockResolvedValue('develop');
+        const baseRefSpy = vi.spyOn(githubModule, 'fetchPullRequestBaseRef')
+          .mockResolvedValueOnce('feature/grpc-kafka')
+          .mockResolvedValue('feature/other');
+        vi.spyOn(githubModule, 'findSquashMergePr').mockRejectedValue(new GithubRateLimitError('https://api.github.com/search/issues'));
+
+        const result = await resolveHashes(
+          { entries: [pr(174, DEAD_SHA), pr(300, OTHER_DEAD_SHA)], overrides: EMPTY_OVERRIDES, ref: 'develop', github: GITHUB },
+          { cwd: fixture.dir },
+        );
+
+        expect(result.resolved).toEqual([]);
+        expect(result.unresolved).toHaveLength(2);
+        // Only the first entry's base ref was even looked up — once the
+        // rate limit hit on its search call, the second entry never
+        // attempted a base-ref lookup at all.
+        expect(baseRefSpy).toHaveBeenCalledTimes(1);
+        const rateLimitWarnings = result.warnings.filter((w) => w.includes('rate limit'));
+        expect(rateLimitWarnings).toHaveLength(1);
+      });
+
+      it('short-circuits entirely when fetchDefaultBranch itself is rate-limited', async () => {
+        await fixture.commit('base');
+
+        vi.spyOn(githubModule, 'fetchDefaultBranch').mockRejectedValue(new GithubRateLimitError('https://api.github.com/repos/aklivity/zilla'));
+        const baseRefSpy = vi.spyOn(githubModule, 'fetchPullRequestBaseRef');
+
+        const result = await resolveHashes(
+          { entries: [pr(174, DEAD_SHA)], overrides: EMPTY_OVERRIDES, ref: 'develop', github: GITHUB },
+          { cwd: fixture.dir },
+        );
+
+        expect(result.resolved).toEqual([]);
+        expect(result.unresolved).toHaveLength(1);
+        expect(baseRefSpy).not.toHaveBeenCalled();
+        expect(result.warnings.some((w) => w.includes('rate limit'))).toBe(true);
+      });
+
+      it('preserves cache entries discovered before the rate limit hit', async () => {
+        await fixture.commit('base');
+        const squashCommit = await fixture.commit('grpc-kafka feature baseline (#225)');
+
+        vi.spyOn(githubModule, 'fetchDefaultBranch').mockResolvedValue('develop');
+        vi.spyOn(githubModule, 'fetchPullRequestBaseRef')
+          .mockResolvedValueOnce('feature/grpc-kafka')
+          .mockResolvedValueOnce('feature/other');
+        vi.spyOn(githubModule, 'findSquashMergePr')
+          .mockResolvedValueOnce(225)
+          .mockRejectedValueOnce(new GithubRateLimitError('https://api.github.com/search/issues'));
+
+        const squashMergeCache = { prBaseRefs: {}, squashMergePrs: {} };
+        const result = await resolveHashes(
+          {
+            entries: [pr(174, DEAD_SHA), pr(300, OTHER_DEAD_SHA)],
+            overrides: EMPTY_OVERRIDES,
+            ref: 'develop',
+            github: GITHUB,
+            squashMergeCache,
+          },
+          { cwd: fixture.dir },
+        );
+
+        // The first entry resolved before the rate limit hit on the second.
+        // Entry 300's base-ref lookup itself succeeded (and is cached) —
+        // only its subsequent search call was rate-limited — so
+        // prBaseRefs has both, while squashMergePrs only has the one
+        // search that actually completed.
+        expect(result.resolved).toEqual([pr(174, squashCommit)]);
+        expect(result.unresolved).toHaveLength(1);
+        expect(squashMergeCache.prBaseRefs).toEqual({ '174': 'feature/grpc-kafka', '300': 'feature/other' });
+        expect(squashMergeCache.squashMergePrs).toEqual({ 'feature/grpc-kafka': 225 });
+      });
+
+      it('does not swallow an unexpected (non-rate-limit) error', async () => {
+        await fixture.commit('base');
+
+        vi.spyOn(githubModule, 'fetchDefaultBranch').mockResolvedValue('develop');
+        vi.spyOn(githubModule, 'fetchPullRequestBaseRef').mockRejectedValue(new Error('network blip'));
+
+        await expect(resolveHashes(
+          { entries: [pr(174, DEAD_SHA)], overrides: EMPTY_OVERRIDES, ref: 'develop', github: GITHUB },
+          { cwd: fixture.dir },
+        )).rejects.toThrow('network blip');
+      });
     });
   });
 });
