@@ -4,7 +4,7 @@ import { resolveUpstreamConfig } from './discover-upstream.js';
 import { GithubDriver } from './drivers/github.js';
 import { cloneOrUpdateRepo } from './git.js';
 import { expandTransitiveDependencySet, indexMavenModules, readDependencySet } from './maven.js';
-import { EMPTY_OVERRIDES, loadOverrides } from './overrides.js';
+import { loadOverrides } from './overrides.js';
 import { place } from './placement.js';
 import type { FoldInsByBucket } from './render/default.js';
 import { render } from './render/default.js';
@@ -103,6 +103,12 @@ async function computeUpstreamFoldIn(
   await cloneOrUpdateRepo(upstreamOwner, upstreamRepo, upstreamDir, options.token);
 
   const upstreamFileConfig = await loadRepoConfig(upstreamDir, '.gitflow-changelog.yml');
+  // The upstream's own checked-in overrides — highest-precedence tier for
+  // *its* history, same as it would be for a direct run against that repo.
+  // Read from its clone at upstreamDir, same convention as
+  // upstreamFileConfig above; loadOverrides already no-ops when the file
+  // doesn't exist, so an upstream with no overrides file costs nothing extra.
+  const upstreamOverrides = await loadOverrides(join(upstreamDir, '.gitflow-changelog-hash-overrides.yml'));
   const upstreamCachePath = `${options.cachePath}.upstream-${upstreamOwner}-${upstreamRepo}.json`;
   const upstreamCache = await loadCache(upstreamCachePath);
   const upstreamDriverOptions: DriverOptions = {
@@ -120,7 +126,7 @@ async function computeUpstreamFoldIn(
   const { resolved: upstreamResolved, warnings: upstreamResolveWarnings } = await resolveHashes(
     {
       entries: upstreamEntries,
-      overrides: EMPTY_OVERRIDES,
+      overrides: upstreamOverrides,
       ref: 'HEAD',
       hashFallbackCache: upstreamCache.hashFallbacks,
       github: { owner: upstreamOwner, repo: upstreamRepo, token: options.token },
