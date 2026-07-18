@@ -280,6 +280,33 @@ export async function fetchPullRequestFiles(
   return filenames;
 }
 
+// Thrown by fetchDefaultBranch/fetchPullRequestBaseRef/findSquashMergePr
+// instead of returning undefined, so callers (resolve.ts's squash-merge
+// fallback tier) can tell "GitHub says this genuinely doesn't exist" apart
+// from "we're rate-limited and have no idea" — treating the two the same
+// would silently drop resolvable entries with a misleading "no candidate
+// commit references it" warning for the rest of a rate-limited run.
+export class GithubRateLimitError extends Error {
+  constructor(url: string) {
+    super(`GitHub API rate limit hit calling ${url}`);
+    this.name = 'GithubRateLimitError';
+  }
+}
+
+// GitHub signals primary rate-limit exhaustion as 403 with
+// X-RateLimit-Remaining: 0, and secondary (abuse-detection) rate limits as
+// 403 or 429 with a Retry-After header — both distinct from an ordinary
+// 403 (e.g. token lacks scope) or 404 (genuinely not found), which should
+// still resolve to undefined, not this error.
+function isRateLimited(response: Response): boolean {
+  if (response.status === 429)
+  {
+    return true;
+  }
+  return response.status === 403
+    && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.get('retry-after') !== null);
+}
+
 interface GithubRepo {
   default_branch: string;
 }
@@ -302,6 +329,10 @@ export async function fetchDefaultBranch(owner: string, repo: string, token: str
   });
   if (!response.ok)
   {
+    if (isRateLimited(response))
+    {
+      throw new GithubRateLimitError(url);
+    }
     return undefined;
   }
   const data = (await response.json()) as GithubRepo;
@@ -332,6 +363,10 @@ export async function fetchPullRequestBaseRef(
   });
   if (!response.ok)
   {
+    if (isRateLimited(response))
+    {
+      throw new GithubRateLimitError(url);
+    }
     return undefined;
   }
   const pr = (await response.json()) as GithubPullRequest;
@@ -381,6 +416,10 @@ export async function findSquashMergePr(
   });
   if (!response.ok)
   {
+    if (isRateLimited(response))
+    {
+      throw new GithubRateLimitError(url);
+    }
     return undefined;
   }
   const result = (await response.json()) as GithubSearchResult;
