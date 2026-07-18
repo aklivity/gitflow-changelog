@@ -86,8 +86,10 @@ format: default
 This is a policy that doesn't vary by branch or by which step (`prepare` vs.
 `finalize`) is running, so one file avoids the same setting drifting out of
 sync across every copy of a release workflow. Settings that genuinely do
-vary per call site — `ref`, `token`, `git-dir`, `cache-path`,
-`overrides-path`, `output-path` — stay as action inputs.
+vary per call site — `ref`, `token`, `git-dir`, `cache-path`, `output-path`
+— stay as action inputs. `overrides-path` also follows the config-path
+convention: auto-loaded from `.gitflow-changelog-hash-overrides.yml` if
+present, no input needed.
 
 The matching action inputs (`tag-pattern`, `enhancement-labels`,
 `bug-labels`, `exclude-labels`, `format`) still exist as one-off overrides
@@ -134,8 +136,10 @@ the fact (e.g. a PR merged to a feature branch that was later rebased).
 
 Resolution order, highest precedence first:
 
-1. **Checked-in override** — a YAML file in the consuming repo (path via the
-   `overrides-path` input), keyed by PR/issue number:
+1. **Checked-in override** — a YAML file in the consuming repo, keyed by
+   PR/issue number. Auto-loaded from `.gitflow-changelog-hash-overrides.yml`
+   if present — no workflow changes needed; override the path via the
+   `overrides-path` input only if you want a different filename:
 
    ```yaml
    pr-overrides:
