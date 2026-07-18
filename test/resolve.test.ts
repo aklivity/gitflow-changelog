@@ -12,6 +12,10 @@ function pr(number: number, sha: string): Entry {
   return { number, kind: 'pr', category: 'issue', title: `pr ${number}`, login: 'octocat', bot: false, sha };
 }
 
+function issue(number: number, sha: string): Entry {
+  return { number, kind: 'issue', category: 'issue', title: `issue ${number}`, login: 'octocat', bot: false, sha };
+}
+
 describe('resolveHashes', () => {
   let fixture: GitFixture;
 
@@ -44,13 +48,35 @@ describe('resolveHashes', () => {
     const result = await resolveHashes(
       {
         entries: [pr(1947, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')],
-        overrides: { prOverrides: new Map([[1947, c2]]), issueOverrides: new Map() },
+        overrides: new Map([['deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', c2]]),
         ref: 'develop',
       },
       { cwd: fixture.dir },
     );
 
     expect(result.resolved).toEqual([pr(1947, c2)]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  // The core motivating case: an issue auto-closed by a merged PR has its
+  // sha backfilled from that PR's own commit (applyClosingReferences in
+  // drivers/github.ts), so both entries carry the identical broken sha —
+  // one hash-overrides entry resolves both, no per-(kind, number) override
+  // needed for each.
+  it('a single override entry resolves both a PR and an issue sharing the same broken sha', async () => {
+    await fixture.commit('base');
+    const replacement = await fixture.commit('the squash commit that actually carries this content');
+
+    const result = await resolveHashes(
+      {
+        entries: [pr(174, DEAD_SHA), issue(171, DEAD_SHA)],
+        overrides: new Map([[DEAD_SHA, replacement]]),
+        ref: 'develop',
+      },
+      { cwd: fixture.dir },
+    );
+
+    expect(result.resolved).toEqual([pr(174, replacement), issue(171, replacement)]);
     expect(result.unresolved).toEqual([]);
   });
 
@@ -156,7 +182,7 @@ describe('resolveHashes', () => {
     const result = await resolveHashes(
       {
         entries: [pr(42, DEAD_SHA)],
-        overrides: { prOverrides: new Map([[42, c3]]), issueOverrides: new Map() },
+        overrides: new Map([[DEAD_SHA, c3]]),
         ref: 'develop',
         hashFallbackCache: cache,
       },
