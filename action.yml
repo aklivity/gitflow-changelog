@@ -45,11 +45,14 @@ inputs:
     default: .gitflow-changelog-cache.json
   overrides-path:
     description: >-
-      Path to a YAML file (in the consuming repo) mapping PR/issue numbers to
-      a replacement commit SHA, for entries whose recorded commit no longer
-      exists (e.g. after a history rewrite on another branch, or a squash
-      merge that flattened it away). Auto-loaded from this default path if
-      present — no workflow changes needed to start using it.
+      Path to a YAML file (in the consuming repo) mapping a broken/recorded
+      commit sha to its replacement, for entries whose recorded commit no
+      longer exists (e.g. after a history rewrite on another branch, or a
+      squash merge that flattened it away). Keyed by sha rather than PR/issue
+      number, so one entry covers a PR and any issue it closes (an issue
+      auto-closed by a merged PR has its sha backfilled from that PR's own
+      commit, so both always carry the identical sha). Auto-loaded from this
+      default path if present — no workflow changes needed to start using it.
     required: false
     default: .gitflow-changelog-hash-overrides.yml
   config-path:

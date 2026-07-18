@@ -132,20 +132,24 @@ A recorded `merge_commit_sha` or closing `commit_id` can point at a commit
 that no longer exists in the repository at all — distinct from "a valid
 commit that just isn't reachable from this branch," which is a normal,
 correct drop. This happens when history is rewritten on another branch after
-the fact (e.g. a PR merged to a feature branch that was later rebased).
+the fact (e.g. a PR merged to a feature branch that was later rebased or
+squash-merged).
 
 Resolution order, highest precedence first:
 
-1. **Checked-in override** — a YAML file in the consuming repo, keyed by
-   PR/issue number. Auto-loaded from `.gitflow-changelog-hash-overrides.yml`
-   if present — no workflow changes needed; override the path via the
+1. **Checked-in override** — a YAML file in the consuming repo, keyed by the
+   broken commit sha itself (not by PR/issue number): an issue auto-closed by
+   a merged PR has its sha backfilled from that PR's own commit, so a PR and
+   the issue(s) it closes always carry the identical recorded sha — one entry
+   here fixes both, and any other entry that happens to share the same
+   broken sha, with no need to enumerate every affected PR/issue number by
+   hand. Auto-loaded from `.gitflow-changelog-hash-overrides.yml` if
+   present — no workflow changes needed; override the path via the
    `overrides-path` input only if you want a different filename:
 
    ```yaml
-   pr-overrides:
-     1947: e72d75fbfa8b916bcb89645425248ad162ee6101
-   issue-overrides:
-     1766: 07c16cbf1b0195516e42859768fc3dea2d7eaea5
+   hash-overrides:
+     54ab5fa6ace003e9a559f83d4a94ef847a733bbd: eb43dc7e4b78b1095f56767c004cd443a423bbd0
    ```
 
 2. **As recorded**, if the commit resolves locally.

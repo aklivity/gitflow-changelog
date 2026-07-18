@@ -3,19 +3,18 @@ import { parse } from 'yaml';
 import { z } from 'zod';
 
 const OverridesSchema = z.object({
-  'pr-overrides': z.record(z.string(), z.string()).default({}),
-  'issue-overrides': z.record(z.string(), z.string()).default({}),
+  'hash-overrides': z.record(z.string(), z.string()).default({}),
 });
 
-export interface HashOverrides {
-  prOverrides: Map<number, string>;
-  issueOverrides: Map<number, string>;
-}
+// Keyed by the broken/recorded commit sha itself, not by (kind, number) —
+// an issue auto-closed by a merged PR has its sha backfilled from that
+// PR's own commit (see applyClosingReferences in drivers/github.ts), so
+// the two entries always carry the identical sha and always want the
+// identical replacement. A single sha-to-sha mapping covers both without
+// requiring a human to enumerate every affected PR/issue number by hand.
+export type HashOverrides = Map<string, string>;
 
-export const EMPTY_OVERRIDES: HashOverrides = {
-  prOverrides: new Map(),
-  issueOverrides: new Map(),
-};
+export const EMPTY_OVERRIDES: HashOverrides = new Map();
 
 export async function loadOverrides(path: string | undefined): Promise<HashOverrides> {
   if (!path)
@@ -34,15 +33,9 @@ export async function loadOverrides(path: string | undefined): Promise<HashOverr
   }
 
   const parsed = OverridesSchema.parse(parse(raw) ?? {});
-  return {
-    prOverrides: new Map(Object.entries(parsed['pr-overrides']).map(([number, sha]) => [Number(number), sha])),
-    issueOverrides: new Map(
-      Object.entries(parsed['issue-overrides']).map(([number, sha]) => [Number(number), sha]),
-    ),
-  };
+  return new Map(Object.entries(parsed['hash-overrides']));
 }
 
-export function overrideFor(entry: { number: number; kind: 'issue' | 'pr' }, overrides: HashOverrides): string | undefined {
-  const table = entry.kind === 'pr' ? overrides.prOverrides : overrides.issueOverrides;
-  return table.get(entry.number);
+export function overrideFor(entry: { sha: string }, overrides: HashOverrides): string | undefined {
+  return overrides.get(entry.sha);
 }

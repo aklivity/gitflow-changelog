@@ -65,7 +65,7 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
       warnings.push(
         `${entry.kind} #${entry.number}: recorded commit ${entry.sha} does not exist in this repository ` +
           `(likely history rewrite); reusing cached substitute ${cached.resolvedSha} from a previous run. ` +
-          `If this is wrong, add an explicit override for #${entry.number} to the changelog-hash-overrides file.`,
+          `If this is wrong, add an explicit override for ${entry.sha} to the changelog-hash-overrides file.`,
       );
       resolved.push({ ...entry, sha: cached.resolvedSha });
       continue;
@@ -87,7 +87,7 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
       warnings.push(
         `${entry.kind} #${entry.number}: recorded commit ${entry.sha} does not exist in this repository ` +
           `(likely history rewrite); auto-substituted ${candidate}, found by scanning commit messages for ` +
-          `"#${entry.number}". If this recurs, add an explicit override for #${entry.number} to the ` +
+          `"#${entry.number}". If this recurs, add an explicit override for ${entry.sha} to the ` +
           'changelog-hash-overrides file.',
       );
       cache[fallbackCacheKey(entry)] = { originalSha: entry.sha, resolvedSha: candidate };
@@ -101,7 +101,7 @@ export async function resolveHashes(input: ResolveInput, gitOptions: GitOptions)
       : `${candidates.length} candidate commits reference it ambiguously`;
     warnings.push(
       `${entry.kind} #${entry.number}: recorded commit ${entry.sha} does not exist in this repository and ` +
-        `${candidateDescription}; dropping this entry. Add an explicit override for #${entry.number} to the ` +
+        `${candidateDescription}; dropping this entry. Add an explicit override for ${entry.sha} to the ` +
         'changelog-hash-overrides file to fix this.',
     );
     unresolved.push({ entry, reason, candidates });
