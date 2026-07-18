@@ -178,6 +178,17 @@ Resolution order, highest precedence first:
    broken sha. Discovered base refs and squash-merge PR numbers are cached
    permanently (both are immutable once merged), so this only costs GitHub
    API calls once per affected PR/branch, not on every run.
+
+   If GitHub signals rate-limit exhaustion (a 403 with
+   `X-RateLimit-Remaining: 0`, a secondary/abuse-detection 403 with
+   `Retry-After`, or a 429) partway through, this tier stops attempting
+   further lookups for the rest of the run rather than silently reporting
+   every remaining entry as unresolvable — a single clear warning is
+   emitted instead. Anything already discovered before the limit was hit
+   stays in the persisted cache, so the next run resumes from there instead
+   of starting over. An ordinary 403 (e.g. a token missing a required
+   scope) or 404 is unaffected and still resolves to "not found," same as
+   before.
 5. **Flagged unresolved** — zero or multiple ambiguous candidates at any
    tier: the entry is dropped and a warning names the PR/issue and the
    unresolvable SHA, so a human can add an explicit override.
