@@ -49,7 +49,12 @@ export async function toRunOptions(raw: RawInputs): Promise<RunOptions> {
     ref: raw.ref ?? 'HEAD',
     gitDir,
     cachePath: raw.cachePath ?? '.gitflow-changelog-cache.json',
-    overridesPath: raw.overridesPath,
+    // Auto-loaded like configPath's own default below — loadOverrides
+    // already treats a missing file as "no overrides" (same try/catch
+    // idiom loadRepoConfig uses), so a repo with no override file sees no
+    // behavior change, and one that commits this file gets it picked up
+    // with no workflow wiring at all.
+    overridesPath: raw.overridesPath ?? '.gitflow-changelog-hash-overrides.yml',
     tagPattern: new RegExp(raw.tagPattern || fileConfig['tag-pattern'] || '.*'),
     enhancementLabels: splitLabels(raw.enhancementLabels, fileConfig['enhancement-labels'] ?? ['enhancement']),
     bugLabels: splitLabels(raw.bugLabels, fileConfig['bug-labels'] ?? ['bug']),

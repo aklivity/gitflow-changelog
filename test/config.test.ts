@@ -61,4 +61,16 @@ describe('toRunOptions config-file precedence', () => {
 
     expect(options.tagPattern).toEqual(/foo/);
   });
+
+  it('defaults overridesPath to .gitflow-changelog-hash-overrides.yml, same convention as config-path', async () => {
+    const options = await toRunOptions({ owner: 'o', repo: 'r', token: 't', gitDir: dir });
+
+    expect(options.overridesPath).toBe('.gitflow-changelog-hash-overrides.yml');
+  });
+
+  it('lets an explicit overrides-path input override the default', async () => {
+    const options = await toRunOptions({ owner: 'o', repo: 'r', token: 't', gitDir: dir, overridesPath: 'custom-overrides.yml' });
+
+    expect(options.overridesPath).toBe('custom-overrides.yml');
+  });
 });

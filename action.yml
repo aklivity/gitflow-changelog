@@ -47,8 +47,11 @@ inputs:
     description: >-
       Path to a YAML file (in the consuming repo) mapping PR/issue numbers to
       a replacement commit SHA, for entries whose recorded commit no longer
-      exists (e.g. after a history rewrite on another branch).
+      exists (e.g. after a history rewrite on another branch, or a squash
+      merge that flattened it away). Auto-loaded from this default path if
+      present — no workflow changes needed to start using it.
     required: false
+    default: .gitflow-changelog-hash-overrides.yml
   config-path:
     description: >-
       Path to a YAML file (in the consuming repo) holding changelog policy —
