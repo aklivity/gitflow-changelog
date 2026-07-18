@@ -87,11 +87,16 @@ function withFoldInOnlyBuckets(placement: Awaited<ReturnType<typeof place>>, fol
 // label categorization stays owned by that repo, same as any direct run
 // against it would use — fold-in itself places upstream entries globally,
 // unscoped by any tag pattern (see placeUpstreamGlobally in upstream.ts).
+interface UpstreamFoldInResult {
+  sections: Map<string | null, FoldInSection>;
+  warnings: string[];
+}
+
 async function computeUpstreamFoldIn(
   upstream: ExplicitUpstreamConfig,
   ownPlacement: Awaited<ReturnType<typeof place>>,
   options: RunOptions,
-): Promise<Map<string | null, FoldInSection>> {
+): Promise<UpstreamFoldInResult> {
   const [upstreamOwner, upstreamRepo] = upstream.repo.split('/');
   const upstreamDir = join(options.upstreamCacheDir, `${upstreamOwner}-${upstreamRepo}`);
 
@@ -112,7 +117,7 @@ async function computeUpstreamFoldIn(
   const upstreamDriver = new GithubDriver(upstreamCache);
   const upstreamEntries = await upstreamDriver.fetchEntries(upstreamDriverOptions);
 
-  const { resolved: upstreamResolved } = await resolveHashes(
+  const { resolved: upstreamResolved, warnings: upstreamResolveWarnings } = await resolveHashes(
     {
       entries: upstreamEntries,
       overrides: EMPTY_OVERRIDES,
@@ -123,6 +128,12 @@ async function computeUpstreamFoldIn(
     },
     { cwd: upstreamDir },
   );
+  // Prefixed with the upstream's own identity — these warnings are about
+  // resolving *its* history (e.g. a squash-merge substitution, a rate
+  // limit, or an unresolvable entry within the upstream repo itself), not
+  // this repo's own resolution, so a reader needs to know which repo a
+  // given warning is even about.
+  const warnings = upstreamResolveWarnings.map((warning) => `upstream ${upstream.repo}: ${warning}`);
 
   const groupId = upstream['maven-group-id'] ?? `io.aklivity.${upstreamRepo}`;
   const modules = upstream.classification === 'maven'
@@ -156,7 +167,7 @@ async function computeUpstreamFoldIn(
   // mutates upstreamCache.prFiles in place as it fetches, and those newly
   // cached file lists need to make it into the persisted cache too.
   await saveCache(upstreamCachePath, upstreamCache);
-  return sections;
+  return { sections, warnings };
 }
 
 export async function run(options: RunOptions): Promise<RunResult> {
@@ -220,7 +231,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
       continue;
     }
 
-    const sections = await computeUpstreamFoldIn(upstream, placement, options);
+    const { sections, warnings: upstreamWarnings } = await computeUpstreamFoldIn(upstream, placement, options);
+    warnings.push(...upstreamWarnings);
     for (const [bucketTag, section] of sections)
     {
       addFoldIn(foldIns, bucketTag, section);

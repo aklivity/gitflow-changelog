@@ -127,4 +127,67 @@ describe('run — upstream fold-in wiring', () => {
     expect(featureIndex).toBeLessThan(v100Index);
     expect(v100Index).toBeLessThan(bugfixIndex);
   });
+
+  // computeUpstreamFoldIn runs resolveHashes against the upstream repo's own
+  // history — the exact same tiers (checked-in override, cache reuse,
+  // commit-message scan, squash-merge discovery) as the consuming repo's own
+  // resolution. Its warnings must surface with the same visibility, prefixed
+  // with the upstream's identity so a reader knows which repo a warning is
+  // about — see issue #30 (a real squash-merge substitution or rate limit
+  // while resolving the upstream's entries was previously invisible).
+  it('surfaces resolveHashes warnings from resolving upstream entries, prefixed with the upstream repo', async () => {
+    await upstream.commit('feature A');
+    await upstream.tag('1.2.5', '2024-01-01T00:00:00Z');
+
+    await writePom(consumer.dir, '1.2.5');
+    const consumerSha = await consumer.commit('bump to 1.2.5');
+    await consumer.tag('v1.0.0', '2024-01-05T00:00:00Z');
+
+    const ownEntry = entry({ number: 500, title: 'Our own change', sha: consumerSha });
+    // Unresolvable: no override, no such commit, and no commit message in
+    // the upstream fixture's history references #9999.
+    const brokenUpstreamIssue = entry({
+      number: 9999,
+      kind: 'issue',
+      title: 'ghost issue',
+      sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    });
+
+    vi.spyOn(GithubDriver.prototype, 'fetchEntries').mockImplementation(async (options) => {
+      if (options.repo === 'app') return [ownEntry];
+      if (options.repo === 'engine') return [brokenUpstreamIssue];
+      return [];
+    });
+    vi.spyOn(gitModule, 'cloneOrUpdateRepo').mockImplementation(async (_owner, _repo, dir) => {
+      await execFileAsync('git', ['clone', '--quiet', upstream.dir, dir]);
+    });
+
+    const result = await run({
+      owner: 'acme',
+      repo: 'app',
+      token: 't',
+      ref: 'develop',
+      gitDir: consumer.dir,
+      cachePath: join(consumer.dir, '.gitflow-changelog-cache.json'),
+      upstreamCacheDir,
+      tagPattern: /^v\d+\.\d+\.\d+$/,
+      enhancementLabels: ['enhancement'],
+      bugLabels: ['bug'],
+      excludeLabels: [],
+      format: 'default',
+      upstream: [
+        {
+          repo: 'acme/engine',
+          'dependency-version-file': 'pom.xml',
+          'dependency-version-property': 'engine.version',
+          classification: 'none',
+        },
+      ],
+    });
+
+    const upstreamWarning = result.warnings.find((warning) => warning.startsWith('upstream acme/engine:'));
+    expect(upstreamWarning).toBeDefined();
+    expect(upstreamWarning).toContain('issue #9999');
+    expect(upstreamWarning).toContain('dropping this entry');
+  });
 });
