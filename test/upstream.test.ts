@@ -54,7 +54,7 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
       { cwd: fixture.dir },
     );
 
-    expect(selectEntriesInRange(placement, '1.2.4', '1.2.6').map((e) => e.number)).toEqual([300, 200]);
+    expect((await selectEntriesInRange(placement, '1.2.4', '1.2.6', { cwd: fixture.dir })).map((e) => e.number)).toEqual([300, 200]);
   });
 
   it('selects everything up to toVersion when fromVersion is undefined (first release)', async () => {
@@ -65,7 +65,7 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
 
     const placement = await placeUpstreamGlobally([pr(100, shaAt100), pr(200, shaAt200)], { cwd: fixture.dir });
 
-    expect(selectEntriesInRange(placement, undefined, '1.2.5').map((e) => e.number)).toEqual([200, 100]);
+    expect((await selectEntriesInRange(placement, undefined, '1.2.5', { cwd: fixture.dir })).map((e) => e.number)).toEqual([200, 100]);
   });
 
   it('excludes an entry not reachable from toVersion at all (a different, unrelated line of history)', async () => {
@@ -77,7 +77,7 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
 
     const placement = await placeUpstreamGlobally([pr(100, shaOnMain), pr(200, shaOffBranch)], { cwd: fixture.dir });
 
-    expect(selectEntriesInRange(placement, undefined, '1.2.4').map((e) => e.number)).toEqual([100]);
+    expect((await selectEntriesInRange(placement, undefined, '1.2.4', { cwd: fixture.dir })).map((e) => e.number)).toEqual([100]);
   });
 
   // The actual bug this guards against (#10): a consumer's pom.xml can pin a
@@ -93,7 +93,7 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
 
     const placement = await placeUpstreamGlobally([pr(1, shaAt1), pr(2, shaAt2)], { cwd: fixture.dir });
 
-    expect(selectEntriesInRange(placement, '1.0.0', '2.0.0-alpha-22').map((e) => e.number)).toEqual([2]);
+    expect((await selectEntriesInRange(placement, '1.0.0', '2.0.0-alpha-22', { cwd: fixture.dir })).map((e) => e.number)).toEqual([2]);
   });
 
   // The bug #7 originally fixed, now solved without any per-tag rescoping:
@@ -110,14 +110,19 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
 
     const placement = await placeUpstreamGlobally([pr(1990, shaAt1990), pr(2080, shaAt2080)], { cwd: fixture.dir });
 
-    expect(selectEntriesInRange(placement, '1.2.5', '1.2.6').map((e) => e.number)).toEqual([2080]);
-    expect(selectEntriesInRange(placement, undefined, '1.2.5').map((e) => e.number)).toEqual([1990]);
+    expect((await selectEntriesInRange(placement, '1.2.5', '1.2.6', { cwd: fixture.dir })).map((e) => e.number)).toEqual([2080]);
+    expect((await selectEntriesInRange(placement, undefined, '1.2.5', { cwd: fixture.dir })).map((e) => e.number)).toEqual([1990]);
   });
 
-  // The actual performance fix: placement is computed once, up front — not
-  // once per version range. Slicing additional ranges out of an
-  // already-computed placement makes no further git calls at all.
-  it('computes placement with one tagsContaining call per entry, then slices ranges with zero further git calls', async () => {
+  // The actual performance fix (#5): placement is computed once, up front —
+  // not once per version range. Slicing additional ranges out of an
+  // already-computed placement makes no further tagsContaining calls at
+  // all — the O(entries) cost stays paid exactly once regardless of how
+  // many ranges get sliced. selectEntriesInRange's own ancestry check
+  // (added for #36) is a separate, much cheaper cost bounded by the number
+  // of tags between two dates, not by entry count — untouched by this
+  // fix and asserted separately below.
+  it('computes placement with one tagsContaining call per entry, then slices ranges with zero further tagsContaining calls', async () => {
     const shaAt100 = await fixture.commit('feature 100');
     await fixture.tag('1.2.4', '2024-01-01T00:00:00Z');
     const shaAt200 = await fixture.commit('feature 200');
@@ -131,11 +136,44 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
 
     expect(spy).toHaveBeenCalledTimes(entries.length);
 
-    selectEntriesInRange(placement, '1.2.4', '1.2.6');
-    selectEntriesInRange(placement, undefined, '1.2.4');
-    selectEntriesInRange(placement, '1.2.5', '1.2.6');
+    await selectEntriesInRange(placement, '1.2.4', '1.2.6', { cwd: fixture.dir });
+    await selectEntriesInRange(placement, undefined, '1.2.4', { cwd: fixture.dir });
+    await selectEntriesInRange(placement, '1.2.5', '1.2.6', { cwd: fixture.dir });
 
     expect(spy).toHaveBeenCalledTimes(entries.length);
+  });
+
+  // #36: reproduces the real aklivity/zilla-plus/zilla bug. zilla tags two
+  // parallel lines (develop's alpha builds, support/1.x's patch releases)
+  // whose dates interleave arbitrarily — a pure date-window walk between
+  // support/1.x's 1.2.6 and 1.3.0 would wrongly sweep in every alpha tag
+  // dated in between, and with it, entries that only ever shipped on
+  // develop.
+  it('excludes entries under tags from a parallel branch line even when their dates fall inside the range', async () => {
+    await fixture.commit('shared base');
+    await fixture.branch('support/1.x');
+
+    await fixture.checkout('support/1.x');
+    await fixture.tag('1.2.6', '2024-01-01T00:00:00Z');
+
+    await fixture.checkout('develop');
+    const shaAlpha1 = await fixture.commit('develop-only feature (never on support/1.x)');
+    await fixture.tag('2.0.0-alpha-1', '2024-01-05T00:00:00Z');
+    await fixture.commit('another develop-only feature');
+    await fixture.tag('2.0.0-alpha-2', '2024-01-10T00:00:00Z');
+
+    await fixture.checkout('support/1.x');
+    const shaSupportFix = await fixture.commit('real support/1.x fix');
+    await fixture.tag('1.3.0', '2024-01-15T00:00:00Z');
+
+    const placement = await placeUpstreamGlobally(
+      [pr(300, shaSupportFix), pr(999, shaAlpha1)],
+      { cwd: fixture.dir },
+    );
+
+    const result = await selectEntriesInRange(placement, '1.2.6', '1.3.0', { cwd: fixture.dir });
+
+    expect(result.map((e) => e.number)).toEqual([300]);
   });
 });
 

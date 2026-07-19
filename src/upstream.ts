@@ -1,6 +1,6 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
 import type { GitOptions, TagInfo } from './git.js';
-import { filesChangedInCommit, listTags, showFile, tagsContaining } from './git.js';
+import { filesChangedInCommit, isAncestor, listTags, showFile, tagsContaining } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import type { MavenModule } from './maven.js';
@@ -130,26 +130,49 @@ export async function placeUpstreamGlobally(entries: Entry[], gitOptions: GitOpt
 }
 
 // Slices the entries strictly after fromVersion (exclusive) and up to and
-// including toVersion out of an already-computed UpstreamPlacement — pure
-// index arithmetic against the precomputed tag/entry map, no git calls.
+// including toVersion out of an already-computed UpstreamPlacement.
 // Newest-tag-first within the range, matching the order a rendered fold-in
 // section expects.
-export function selectEntriesInRange(
+//
+// §36: date order between fromVersion and toVersion is only a candidate
+// pre-filter, not sufficient on its own — an upstream that tags two
+// parallel lines of history (e.g. a maintenance branch and its main
+// development line) can interleave those tags' dates arbitrarily, so a
+// pure date-window walk bleeds in tags (and their entries) from a branch
+// this range has nothing to do with. A candidate tag only really belongs
+// in (fromVersion, toVersion] when its commit is an ancestor of
+// toVersion's commit and not an ancestor of fromVersion's commit — the
+// same ancestry check already used elsewhere, applied here per candidate
+// tag rather than per entry, so cost stays bounded by the number of tags
+// between two dates, not the number of entries.
+export async function selectEntriesInRange(
   placement: UpstreamPlacement,
   fromVersion: string | undefined,
   toVersion: string,
-): Entry[] {
+  gitOptions: GitOptions,
+): Promise<Entry[]> {
   const toIndex = placement.tagsByDateAsc.findIndex((tag) => tag.name === toVersion);
   if (toIndex === -1)
   {
     return [];
   }
+  const toTag = placement.tagsByDateAsc[toIndex];
   const fromIndex = fromVersion ? placement.tagsByDateAsc.findIndex((tag) => tag.name === fromVersion) : -1;
+  const fromTag = fromIndex !== -1 ? placement.tagsByDateAsc[fromIndex] : undefined;
 
   const entries: Entry[] = [];
   for (let index = toIndex; index > fromIndex; index -= 1)
   {
-    entries.push(...(placement.entriesByTag.get(placement.tagsByDateAsc[index].name) ?? []));
+    const candidate = placement.tagsByDateAsc[index];
+    if (!(await isAncestor(candidate.sha, toTag.sha, gitOptions)))
+    {
+      continue;
+    }
+    if (fromTag && (await isAncestor(candidate.sha, fromTag.sha, gitOptions)))
+    {
+      continue;
+    }
+    entries.push(...(placement.entriesByTag.get(candidate.name) ?? []));
   }
   return entries;
 }
@@ -353,7 +376,7 @@ export async function computeFoldIn(options: ComputeFoldInOptions): Promise<Map<
 
   for (const range of ranges)
   {
-    const candidates = selectEntriesInRange(upstreamPlacement, range.fromVersion, range.toVersion);
+    const candidates = await selectEntriesInRange(upstreamPlacement, range.fromVersion, range.toVersion, options.upstreamGitOptions);
     const entries = await filterForFoldIn(candidates, {
       level: options.upstream.classification,
       owner: upstreamOwner,
