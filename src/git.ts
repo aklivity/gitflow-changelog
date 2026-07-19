@@ -45,6 +45,21 @@ export async function tagsContaining(sha: string, options: GitOptions): Promise<
     .filter((line) => line.length > 0);
 }
 
+// Every tag that is an ancestor of (reachable from) `ref`, in a single git
+// call — the batched form of asking isAncestor(tag, ref) for every tag one
+// at a time. Used to check many candidate tags against one ancestry
+// boundary at once (see selectEntriesInRange in upstream.ts) instead of
+// spawning a separate `merge-base --is-ancestor` per candidate.
+export async function tagsMergedInto(ref: string, options: GitOptions): Promise<Set<string>> {
+  const stdout = await run(['tag', '--merged', ref], options);
+  return new Set(
+    stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0),
+  );
+}
+
 export interface TagInfo {
   name: string;
   sha: string;

@@ -175,6 +175,34 @@ describe('placeUpstreamGlobally and selectEntriesInRange', () => {
 
     expect(result.map((e) => e.number)).toEqual([300]);
   });
+
+  // The ancestry check added for #36 must not degrade into one git call per
+  // candidate tag — that would reintroduce the same shape of scaling
+  // problem #5 already fixed for entry attribution, just moved to range
+  // slicing. tagsMergedInto batches the ancestry question for every tag at
+  // once, so a date window with many candidate tags still costs exactly
+  // two git calls (one per range boundary), not one per candidate.
+  it('checks ancestry with two tagsMergedInto calls per range, not one per candidate tag', async () => {
+    await fixture.commit('base');
+    await fixture.tag('1.2.6', '2024-01-01T00:00:00Z');
+    for (let i = 1; i <= 5; i += 1)
+    {
+      await fixture.commit(`develop-only feature ${i}`);
+      await fixture.tag(`2.0.0-alpha-${i}`, `2024-01-0${i + 1}T00:00:00Z`);
+    }
+    await fixture.tag('1.3.0', '2024-01-10T00:00:00Z');
+
+    const placement = await placeUpstreamGlobally([], { cwd: fixture.dir });
+    const spy = vi.spyOn(gitModule, 'tagsMergedInto');
+
+    await selectEntriesInRange(placement, '1.2.6', '1.3.0', { cwd: fixture.dir });
+
+    // Five intervening candidate tags (2.0.0-alpha-1..5) — if this scaled
+    // per candidate it would be 5+ calls; it should stay at exactly 2
+    // (one for toVersion, one for fromVersion) no matter how many
+    // candidates fall in the date window.
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('readVersionAtRef and computeVersionRanges', () => {

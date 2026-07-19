@@ -1,6 +1,6 @@
 import { fetchPullRequestFiles } from './drivers/github.js';
 import type { GitOptions, TagInfo } from './git.js';
-import { filesChangedInCommit, isAncestor, listTags, showFile, tagsContaining } from './git.js';
+import { filesChangedInCommit, listTags, showFile, tagsContaining, tagsMergedInto } from './git.js';
 import { classifyPaths, DEFAULT_CLASSIFICATION_PATTERNS, featurePathsFromModules } from './classification.js';
 import type { ClassificationPatterns } from './classification.js';
 import type { MavenModule } from './maven.js';
@@ -141,10 +141,13 @@ export async function placeUpstreamGlobally(entries: Entry[], gitOptions: GitOpt
 // pure date-window walk bleeds in tags (and their entries) from a branch
 // this range has nothing to do with. A candidate tag only really belongs
 // in (fromVersion, toVersion] when its commit is an ancestor of
-// toVersion's commit and not an ancestor of fromVersion's commit — the
-// same ancestry check already used elsewhere, applied here per candidate
-// tag rather than per entry, so cost stays bounded by the number of tags
-// between two dates, not the number of entries.
+// toVersion's commit and not an ancestor of fromVersion's commit.
+//
+// Checked via two batched `git tag --merged <ref>` calls (one per
+// boundary) rather than a `merge-base --is-ancestor` spawn per candidate
+// tag — tagsMergedInto answers the ancestry question for every tag in the
+// repo at once, so cost is O(1) git calls per range regardless of how many
+// candidate tags fall in the date window, not O(candidates).
 export async function selectEntriesInRange(
   placement: UpstreamPlacement,
   fromVersion: string | undefined,
@@ -156,19 +159,21 @@ export async function selectEntriesInRange(
   {
     return [];
   }
-  const toTag = placement.tagsByDateAsc[toIndex];
   const fromIndex = fromVersion ? placement.tagsByDateAsc.findIndex((tag) => tag.name === fromVersion) : -1;
-  const fromTag = fromIndex !== -1 ? placement.tagsByDateAsc[fromIndex] : undefined;
+  const fromTagName = fromIndex !== -1 ? placement.tagsByDateAsc[fromIndex].name : undefined;
+
+  const mergedIntoTo = await tagsMergedInto(toVersion, gitOptions);
+  const mergedIntoFrom = fromTagName ? await tagsMergedInto(fromTagName, gitOptions) : undefined;
 
   const entries: Entry[] = [];
   for (let index = toIndex; index > fromIndex; index -= 1)
   {
     const candidate = placement.tagsByDateAsc[index];
-    if (!(await isAncestor(candidate.sha, toTag.sha, gitOptions)))
+    if (!mergedIntoTo.has(candidate.name))
     {
       continue;
     }
-    if (fromTag && (await isAncestor(candidate.sha, fromTag.sha, gitOptions)))
+    if (mergedIntoFrom?.has(candidate.name))
     {
       continue;
     }
