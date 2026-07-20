@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as githubDriver from '../src/drivers/github.js';
 import { mergeReport } from '../src/merge-report.js';
+import type { MergeReportOptions } from '../src/merge-report.js';
 import { createGitFixture, type GitFixture } from './git-fixture.js';
 
 const execFileAsync = promisify(execFile);
@@ -14,11 +15,25 @@ const execFileAsync = promisify(execFile);
 // (2024, counter-based days) so ageDays is stable and easy to assert on,
 // instead of depending on the real clock.
 const NOW = new Date(2025, 0, 1);
+const SUPPORT_PATTERN = /^support\/(\d+)\.x$/;
 
 async function cherryPick(dir: string, sha: string): Promise<string> {
   await execFileAsync('git', ['cherry-pick', sha], { cwd: dir });
   const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: dir });
   return stdout.trim();
+}
+
+function baseOptions(fixture: GitFixture, cachePath: string): MergeReportOptions {
+  return {
+    owner: 'acme',
+    repo: 'widget',
+    token: 't',
+    gitDir: fixture.dir,
+    cachePath,
+    excludeLabels: [],
+    mainline: 'develop',
+    supportPattern: SUPPORT_PATTERN,
+  };
 }
 
 describe('mergeReport', () => {
@@ -39,7 +54,7 @@ describe('mergeReport', () => {
     vi.restoreAllMocks();
   });
 
-  it('reports a genuinely unported commit but not one already cherry-picked to the target', async () => {
+  it('reports a genuinely unported commit but not one already cherry-picked to its target', async () => {
     await fixture.commit('init');
     await fixture.branch('support/1.x');
     await fixture.checkout('support/1.x');
@@ -49,23 +64,84 @@ describe('mergeReport', () => {
     await fixture.checkout('develop');
     await cherryPick(fixture.dir, portedSha);
 
-    const result = await mergeReport(
-      {
-        owner: 'acme',
-        repo: 'widget',
-        token: 't',
-        source: 'support/1.x',
-        targets: ['develop'],
-        gitDir: fixture.dir,
-        cachePath,
-        excludeLabels: [],
-      },
-      NOW,
-    );
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
 
     const shas = result.outstanding.map((entry) => entry.sha);
     expect(shas).toContain(missingSha);
     expect(shas).not.toContain(portedSha);
+  });
+
+  it('sweeps the full topology with no target/sources given: mainline sees every support branch', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.branch('support/2.x');
+    await fixture.checkout('support/1.x');
+    const onOne = await fixture.commit('fix: on support/1.x only');
+    await fixture.checkout('support/2.x');
+    const onTwo = await fixture.commit('fix: on support/2.x only');
+
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
+
+    const develop = result.outstanding.filter((entry) => entry.target === 'develop');
+    expect(develop.map((entry) => entry.sha).sort()).toEqual([onOne, onTwo].sort());
+  });
+
+  it('gives support/N.x only lower-numbered support branches as sources, not mainline or peers above it', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.branch('support/2.x');
+    await fixture.checkout('support/1.x');
+    const onOne = await fixture.commit('fix: on support/1.x only');
+    await fixture.checkout('develop');
+    const onDevelop = await fixture.commit('feat: mainline-only work');
+
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
+
+    const supportTwo = result.outstanding.filter((entry) => entry.target === 'support/2.x');
+    expect(supportTwo.map((entry) => entry.sha)).toEqual([onOne]);
+    expect(supportTwo.map((entry) => entry.sha)).not.toContain(onDevelop);
+  });
+
+  it('reports the lowest support branch as having no sources, trivially clean', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
+
+    const supportOne = result.topology.find((entry) => entry.target === 'support/1.x');
+    expect(supportOne?.sources).toEqual([]);
+    expect(result.outstanding.some((entry) => entry.target === 'support/1.x')).toBe(false);
+  });
+
+  it('narrows to a single target with its auto-computed sources when target is given alone', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.branch('support/2.x');
+    await fixture.checkout('support/1.x');
+    const onOne = await fixture.commit('fix: on support/1.x only');
+    await fixture.checkout('develop');
+    await fixture.commit('feat: mainline-only work');
+
+    const result = await mergeReport({ ...baseOptions(fixture, cachePath), target: 'support/2.x' }, NOW);
+
+    expect(result.topology).toEqual([{ target: 'support/2.x', sources: ['support/1.x'] }]);
+    expect(result.outstanding.map((entry) => entry.sha)).toEqual([onOne]);
+  });
+
+  it('replaces the auto-computed sources entirely when both target and sources are given', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.branch('support/2.x');
+    await fixture.checkout('support/2.x');
+    const onTwo = await fixture.commit('fix: on support/2.x only');
+
+    const result = await mergeReport(
+      { ...baseOptions(fixture, cachePath), target: 'develop', sources: ['support/2.x'] },
+      NOW,
+    );
+
+    expect(result.topology).toEqual([{ target: 'develop', sources: ['support/2.x'] }]);
+    expect(result.outstanding.map((entry) => entry.sha)).toEqual([onTwo]);
   });
 
   it('drops a candidate whose originating PR/issue carries an exclude-label', async () => {
@@ -79,19 +155,7 @@ describe('mergeReport', () => {
       return cache;
     });
 
-    const result = await mergeReport(
-      {
-        owner: 'acme',
-        repo: 'widget',
-        token: 't',
-        source: 'support/1.x',
-        targets: ['develop'],
-        gitDir: fixture.dir,
-        cachePath,
-        excludeLabels: ['dependencies'],
-      },
-      NOW,
-    );
+    const result = await mergeReport({ ...baseOptions(fixture, cachePath), excludeLabels: ['dependencies'] }, NOW);
 
     expect(result.outstanding.map((entry) => entry.sha)).not.toContain(depSha);
   });
@@ -105,47 +169,9 @@ describe('mergeReport', () => {
     const ignorePath = join(cacheDir, '.gitflow-changelog-merge-ignore.yml');
     await writeFile(ignorePath, `merge-ignore:\n  ${ignoredSha}: "branch-only, not applicable to develop"\n`, 'utf8');
 
-    const result = await mergeReport(
-      {
-        owner: 'acme',
-        repo: 'widget',
-        token: 't',
-        source: 'support/1.x',
-        targets: ['develop'],
-        gitDir: fixture.dir,
-        cachePath,
-        mergeIgnorePath: ignorePath,
-        excludeLabels: [],
-      },
-      NOW,
-    );
+    const result = await mergeReport({ ...baseOptions(fixture, cachePath), mergeIgnorePath: ignorePath }, NOW);
 
     expect(result.outstanding.map((entry) => entry.sha)).not.toContain(ignoredSha);
-  });
-
-  it('fans out across multiple targets, reporting each target independently', async () => {
-    await fixture.commit('init');
-    await fixture.branch('support/1.x');
-    await fixture.branch('support/2.x');
-    await fixture.checkout('support/1.x');
-    const onlyOnSource = await fixture.commit('fix: needed everywhere');
-
-    const result = await mergeReport(
-      {
-        owner: 'acme',
-        repo: 'widget',
-        token: 't',
-        source: 'support/1.x',
-        targets: ['develop', 'support/2.x'],
-        gitDir: fixture.dir,
-        cachePath,
-        excludeLabels: [],
-      },
-      NOW,
-    );
-
-    const targets = result.outstanding.filter((entry) => entry.sha === onlyOnSource).map((entry) => entry.target);
-    expect(targets.sort()).toEqual(['develop', 'support/2.x']);
   });
 
   it('sorts outstanding entries oldest-first by commit age', async () => {
@@ -155,19 +181,7 @@ describe('mergeReport', () => {
     const older = await fixture.commit('fix: older');
     const newer = await fixture.commit('fix: newer');
 
-    const result = await mergeReport(
-      {
-        owner: 'acme',
-        repo: 'widget',
-        token: 't',
-        source: 'support/1.x',
-        targets: ['develop'],
-        gitDir: fixture.dir,
-        cachePath,
-        excludeLabels: [],
-      },
-      NOW,
-    );
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
 
     const shas = result.outstanding.map((entry) => entry.sha);
     expect(shas.indexOf(older)).toBeLessThan(shas.indexOf(newer));

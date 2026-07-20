@@ -254,3 +254,37 @@ export async function commitDate(sha: string, options: GitOptions): Promise<stri
   const stdout = await run(['show', '-s', '--format=%cI', sha], options);
   return stdout.trim();
 }
+
+// Every local branch and every origin remote-tracking branch, deduped down
+// to short names (the "origin/" prefix stripped) and filtered to `pattern`.
+// A typical CI checkout only has one local branch, with everything else
+// present as origin/<name> after a fetch — reading both refs/heads and
+// refs/remotes/origin means merge-report's branch discovery works the same
+// way against that shape and against a plain local clone (e.g. a test
+// fixture with no remote at all, where every branch is local).
+export async function listBranches(pattern: RegExp, options: GitOptions): Promise<string[]> {
+  const stdout = await run(['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes/origin'], options);
+  const names = new Set(
+    stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && line !== 'origin/HEAD')
+      .map((name) => name.replace(/^origin\//, '')),
+  );
+  return [...names].filter((name) => pattern.test(name));
+}
+
+async function refExists(ref: string, options: GitOptions): Promise<boolean> {
+  const result = await runAllowFailure(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], options);
+  return result.code === 0;
+}
+
+// Resolves a branch's short name (as returned by listBranches) to a ref
+// git commands can actually operate on. Prefers origin/<name> — the shape
+// every branch except the checked-out one has in a normal CI checkout — and
+// falls back to the bare name for a plain local clone (no origin remote at
+// all, e.g. a test fixture) where the bare name is all that exists.
+export async function resolveRef(name: string, options: GitOptions): Promise<string> {
+  const withOrigin = `origin/${name}`;
+  return (await refExists(withOrigin, options)) ? withOrigin : name;
+}

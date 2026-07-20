@@ -11,13 +11,15 @@ export async function runMergeReportCli(argv: string[]): Promise<void> {
       owner: { type: 'string' },
       repo: { type: 'string' },
       token: { type: 'string' },
-      source: { type: 'string' },
-      targets: { type: 'string' },
       'git-dir': { type: 'string' },
       'cache-path': { type: 'string' },
       'merge-ignore-path': { type: 'string' },
       'config-path': { type: 'string' },
       'exclude-labels': { type: 'string' },
+      'mainline-branch': { type: 'string' },
+      'support-branch-pattern': { type: 'string' },
+      target: { type: 'string' },
+      sources: { type: 'string' },
       output: { type: 'string', default: 'merge-report.md' },
     },
   });
@@ -26,17 +28,19 @@ export async function runMergeReportCli(argv: string[]): Promise<void> {
     owner: values.owner,
     repo: values.repo,
     token: values.token ?? process.env.GITHUB_TOKEN,
-    source: values.source,
-    targets: values.targets,
     gitDir: values['git-dir'],
     cachePath: values['cache-path'],
     mergeIgnorePath: values['merge-ignore-path'],
     configPath: values['config-path'],
     excludeLabels: values['exclude-labels'],
+    mainlineBranch: values['mainline-branch'],
+    supportBranchPattern: values['support-branch-pattern'],
+    target: values.target,
+    sources: values.sources,
   });
 
   const result = await mergeReport(options);
-  const markdown = renderMergeReport(result, { owner: options.owner, repo: options.repo, source: options.source });
+  const markdown = renderMergeReport(result, { owner: options.owner, repo: options.repo });
 
   await writeFile(values.output as string, markdown, 'utf8');
 }
