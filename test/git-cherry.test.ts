@@ -124,7 +124,9 @@ describe('commitDate', () => {
 
     const date = await commitDate(sha, { cwd: fixture.dir });
 
-    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+    // %cI is strict ISO 8601 — a UTC offset renders as trailing "Z" on some
+    // git versions and "+00:00" on others; both are valid, so accept either.
+    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/);
     expect(new Date(date).getUTCFullYear()).toBe(2024);
 
     await fixture.cleanup();
