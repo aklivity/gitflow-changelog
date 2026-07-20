@@ -8,9 +8,10 @@
     "gitflow-changelog": "./dist/cli.js"
   },
   "scripts": {
-    "build": "npm run build:cli && npm run build:action",
+    "build": "npm run build:cli && npm run build:action && npm run build:merge-report-action",
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=dist/cli.js",
     "build:action": "esbuild src/action.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=dist/index.js",
+    "build:merge-report-action": "esbuild src/merge-report-action.ts --bundle --platform=node --target=node20 --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --outfile=merge-report/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -48,11 +48,13 @@ jobs:
           VERSION="${{ inputs.version }}"
           MAJOR="v$(echo "$VERSION" | cut -d. -f1)"
 
-          # dist/ is gitignored on the branch itself — force-add it into this
-          # one release commit, which is reachable only via the tags below,
-          # never pushed onto the branch. develop/main stay dist-free forever.
+          # dist/ and merge-report/index.js are gitignored on the branch
+          # itself — force-add them into this one release commit, which is
+          # reachable only via the tags below, never pushed onto the branch.
+          # develop/main stay build-artifact-free forever.
           git add package.json package-lock.json
           git add -f dist
+          git add -f merge-report/index.js
           git commit -m "chore(release): v${VERSION}"
           git tag -a "v${VERSION}" -m "v${VERSION}"
           git tag -f "$MAJOR" HEAD

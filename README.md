@@ -36,6 +36,12 @@ This design keeps the door open for other platforms (GitLab, etc.) later —
 they'd only need to implement the driver contract; placement and rendering
 are already platform-agnostic.
 
+[`merge-report`](#merge-report-did-a-fix-propagate-everywhere-it-needs-to)
+is a second consumer of the Driver's cached, event-sourced entries — it
+skips Placement and Renderer entirely (it isn't about which release
+something shipped in) and instead cross-references entry labels against
+`git cherry` candidates.
+
 ## Usage
 
 ### As a GitHub Action
@@ -198,6 +204,125 @@ Resolution order, highest precedence first:
    tier: the entry is dropped and a warning names the PR/issue and the
    unresolvable SHA, so a human can add an explicit override.
 
+## merge-report: did a fix propagate everywhere it needs to?
+
+`gitflow-changelog` answers "which release did this fix ship in." A related,
+separate question: **did a fix that landed on one branch actually make it to
+every other branch that needs it?** A bug fix on `support/1.x` that never
+reaches `develop` becomes a regression for a customer upgrading past
+`1.x` — they had the fix, then lost it. The same risk exists between peer
+maintenance branches (`support/1.x` and `support/2.x` both need a fix that
+only landed on one of them). This isn't a "backport" (mainline → older
+branch) — it's the reverse, or a sideways case between peers — hence
+**merge-report**: did this change actually merge across the branches that
+needed it, regardless of direction.
+
+### Branch topology, discovered automatically
+
+`merge-report` doesn't take a source/target pair — it discovers the whole
+branch topology itself and sweeps it in one pass. The mainline branch
+(`develop` by default) and every branch matching a support-branch pattern
+(`support/(\d+)\.x` by default) are found by listing what actually exists
+right now, then each one's *sources* — the branches it should have every
+fix from — are derived purely from naming/version convention:
+
+- the mainline branch's sources are every support branch that exists
+- `support/N.x`'s sources are every `support/M.x` that exists with `M < N`
+- the lowest surviving support branch has no sources — it's trivially clean
+  by definition, and the report says so explicitly rather than omitting it
+
+This is what makes the report self-adjusting: cutting `support/3.x` from
+`develop` doesn't require a check-in anywhere — the next run picks it up as
+a new target with `support/1.x` and `support/2.x` as its sources
+automatically, and `develop`'s own sweep gains a third source the same way.
+It's also what makes a scheduled run and a manual `workflow_dispatch` run
+produce identical results: neither one requires the caller to know or
+supply the current branch topology, since there's nothing to supply.
+
+### As a GitHub Action
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0 # full history — patch-content comparison needs it
+
+# actions/checkout's default fetch refspec only brings full history for the
+# one ref it checks out, even at fetch-depth 0 — every other branch needs an
+# explicit fetch, or discovery below finds nothing to sweep.
+- run: git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+- uses: actions/cache@v4
+  with:
+    path: .gitflow-changelog-cache.json
+    key: gitflow-changelog-v1-${{ github.repository }} # same cache the changelog action uses
+
+- uses: aklivity/gitflow-changelog/merge-report@v1
+```
+
+Run this on a schedule (weekly, say) plus `workflow_dispatch`, not on every
+push or PR merge — at the exact moment a fix lands on some branch it is
+*definitionally* not yet on anything downstream of it, so a merge-triggered
+run would only ever report a guaranteed, contentless "not yet." The
+scheduled sweep is where real signal — something that's been outstanding
+for a while — shows up. GitHub's `schedule` trigger always runs the copy of
+the workflow file on the repo's *default* branch, with no branch-selection
+equivalent to what `workflow_dispatch` offers — so this only works as one
+workflow living on the mainline branch, not as a workflow duplicated across
+every branch expecting to infer "itself" as the target. `git cherry`
+doesn't need any branch checked out, only present locally, which is exactly
+what the fetch step above provides — no per-branch checkout required to
+sweep the whole topology in a single job.
+
+See [`merge-report/action.yml`](./merge-report/action.yml) for the full
+list of inputs, including `target`/`sources` (narrows the sweep to one
+branch, for on-demand debugging — leave unset for the default full sweep)
+and `fail-on-outstanding-after-days` (default 14): the report itself always
+lists everything, unfiltered, oldest-first, one section per branch; this
+input only controls whether the run exits non-zero, which is what actually
+surfaces the finding to a human via GitHub's default scheduled-workflow-
+failure notification — a job summary alone isn't pushed to anyone.
+
+### As a CLI
+
+```bash
+# full sweep — no branch args needed, topology is discovered
+npx gitflow-changelog merge-report --owner aklivity --repo zilla-plus --token "$GITHUB_TOKEN"
+
+# narrowed to one target, for on-demand debugging
+npx gitflow-changelog merge-report --owner aklivity --repo zilla-plus --token "$GITHUB_TOKEN" \
+  --target support/2.x --sources support/1.x
+```
+
+### How it detects a gap
+
+Comparing branches by ancestry (`git log target..source`) doesn't work: it
+flags every cherry-picked or independently re-landed commit as "missing"
+purely because its SHA differs, which is the normal shape of a real
+forward-port. `merge-report` uses `git cherry -v target source` instead —
+patch-id comparison — so a commit re-applied under a new SHA on `source` is
+correctly recognized as already present on `target`.
+
+What's left after that still needs two more filters:
+
+- **`exclude-labels`** — the same list read from `.gitflow-changelog.yml`
+  for changelog categorization. A candidate commit whose originating PR/issue
+  carries one of these labels (e.g. `dependencies`) is dropped the same way
+  it's excluded from the changelog — no second API sweep, just a second
+  consumer of the event-sourced label state the Driver already fetches and
+  caches.
+- **`.gitflow-changelog-merge-ignore.yml`** — a checked-in, sha-keyed list
+  for the residual cases the label sweep can't resolve, each with a required
+  human-written reason:
+
+  ```yaml
+  merge-ignore:
+    a18bdc1c3db328f6f66f53ac84e1eec4f360ce38: "branch-scoped SNAPSHOT reset, not applicable to develop"
+  ```
+
+  Keyed by sha rather than a commit-message convention (`build(deps):`,
+  "backport of #NNNN") — message conventions aren't consistent enough to
+  filter on reliably; a human's explicit, reviewed judgment is.
+
 ## Known limitations
 
 - A label applied without generating a discrete GitHub event (rare, e.g.
@@ -219,15 +344,16 @@ Resolution order, highest precedence first:
 npm install
 npm run typecheck
 npm test
-npm run build   # bundles src/cli.ts -> dist/cli.js and src/action.ts -> dist/index.js
+npm run build   # bundles src/cli.ts -> dist/cli.js, src/action.ts -> dist/index.js,
+                # and src/merge-report-action.ts -> merge-report/index.js
 ```
 
-`dist/` is gitignored and never committed on `develop`/`main` — GitHub
-Actions does not install dependencies for JavaScript actions at run time, so
-a real, working action still needs `dist/index.js` to exist somewhere, but
-that somewhere is a release tag, not the development branch (see
-"Releasing" below). Don't build-and-commit `dist/` locally; `npm run build`
-is for local verification only.
+`dist/` and `merge-report/index.js` are gitignored and never committed on
+`develop`/`main` — GitHub Actions does not install dependencies for
+JavaScript actions at run time, so a real, working action still needs its
+compiled entrypoint to exist somewhere, but that somewhere is a release tag,
+not the development branch (see "Releasing" below). Don't build-and-commit
+these locally; `npm run build` is for local verification only.
 
 ## Releasing
 

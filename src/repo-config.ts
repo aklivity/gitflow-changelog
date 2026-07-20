@@ -12,6 +12,12 @@ const RepoConfigSchema = z.object({
   format: z.string().optional(),
   classification: ClassificationLevel.optional(),
   upstream: z.array(UpstreamConfig).optional(),
+  // merge-report's branch-topology discovery — repo-wide policy the same
+  // way tag-pattern is: which branch is the mainline, and what a
+  // maintenance branch's name looks like (must capture the version as the
+  // first group, compared numerically to order support branches).
+  'mainline-branch': z.string().optional(),
+  'support-branch-pattern': z.string().optional(),
 });
 export type RepoConfig = z.infer<typeof RepoConfigSchema>;
 
