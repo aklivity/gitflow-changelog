@@ -36,6 +36,12 @@ This design keeps the door open for other platforms (GitLab, etc.) later —
 they'd only need to implement the driver contract; placement and rendering
 are already platform-agnostic.
 
+[`merge-report`](#merge-report-did-a-fix-propagate-everywhere-it-needs-to)
+is a second consumer of the Driver's cached, event-sourced entries — it
+skips Placement and Renderer entirely (it isn't about which release
+something shipped in) and instead cross-references entry labels against
+`git cherry` candidates.
+
 ## Usage
 
 ### As a GitHub Action
@@ -198,6 +204,86 @@ Resolution order, highest precedence first:
    tier: the entry is dropped and a warning names the PR/issue and the
    unresolvable SHA, so a human can add an explicit override.
 
+## merge-report: did a fix propagate everywhere it needs to?
+
+`gitflow-changelog` answers "which release did this fix ship in." A related,
+separate question: **did a fix that landed on one branch actually make it to
+every other branch that needs it?** A bug fix on `support/1.x` that never
+reaches `develop` becomes a regression for a customer upgrading past
+`1.x` — they had the fix, then lost it. The same risk exists between peer
+maintenance branches (`support/1.x` and `support/2.x` both need a fix that
+only landed on one of them). This isn't a "backport" (mainline → older
+branch) — it's the reverse, or a sideways case between peers — hence
+**merge-report**: did this change actually merge across the branches that
+needed it, regardless of direction.
+
+### As a GitHub Action
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0 # required — patch-content comparison needs full history
+
+- uses: actions/cache@v4
+  with:
+    path: .gitflow-changelog-cache.json
+    key: gitflow-changelog-v1-${{ github.repository }} # same cache the changelog action uses
+
+- uses: aklivity/gitflow-changelog/merge-report@v1
+  with:
+    source: support/1.x
+    targets: develop
+```
+
+Run this on a schedule (weekly, say) plus `workflow_dispatch`, not on every
+push or PR merge to `source` — at the exact moment a fix lands on `source`
+it is *definitionally* not yet on `targets`, so a merge-triggered run would
+only ever report a guaranteed, contentless "not yet." The scheduled sweep is
+where real signal — something that's been outstanding for a while — shows
+up. See [`merge-report/action.yml`](./merge-report/action.yml) for the full
+list of inputs, including `fail-on-outstanding-after-days` (default 14):
+the report itself always lists everything, unfiltered, oldest-first; this
+input only controls whether the run exits non-zero, which is what actually
+surfaces the finding to a human via GitHub's default scheduled-workflow-
+failure notification — a job summary alone isn't pushed to anyone.
+
+### As a CLI
+
+```bash
+npx gitflow-changelog merge-report --owner aklivity --repo zilla-plus --token "$GITHUB_TOKEN" \
+  --source support/1.x --targets develop
+```
+
+### How it detects a gap
+
+Comparing branches by ancestry (`git log target..source`) doesn't work: it
+flags every cherry-picked or independently re-landed commit as "missing"
+purely because its SHA differs, which is the normal shape of a real
+forward-port. `merge-report` uses `git cherry -v target source` instead —
+patch-id comparison — so a commit re-applied under a new SHA on `source` is
+correctly recognized as already present on `target`.
+
+What's left after that still needs two more filters:
+
+- **`exclude-labels`** — the same list read from `.gitflow-changelog.yml`
+  for changelog categorization. A candidate commit whose originating PR/issue
+  carries one of these labels (e.g. `dependencies`) is dropped the same way
+  it's excluded from the changelog — no second API sweep, just a second
+  consumer of the event-sourced label state the Driver already fetches and
+  caches.
+- **`.gitflow-changelog-merge-ignore.yml`** — a checked-in, sha-keyed list
+  for the residual cases the label sweep can't resolve, each with a required
+  human-written reason:
+
+  ```yaml
+  merge-ignore:
+    a18bdc1c3db328f6f66f53ac84e1eec4f360ce38: "branch-scoped SNAPSHOT reset, not applicable to develop"
+  ```
+
+  Keyed by sha rather than a commit-message convention (`build(deps):`,
+  "backport of #NNNN") — message conventions aren't consistent enough to
+  filter on reliably; a human's explicit, reviewed judgment is.
+
 ## Known limitations
 
 - A label applied without generating a discrete GitHub event (rare, e.g.
@@ -219,15 +305,16 @@ Resolution order, highest precedence first:
 npm install
 npm run typecheck
 npm test
-npm run build   # bundles src/cli.ts -> dist/cli.js and src/action.ts -> dist/index.js
+npm run build   # bundles src/cli.ts -> dist/cli.js, src/action.ts -> dist/index.js,
+                # and src/merge-report-action.ts -> merge-report/index.js
 ```
 
-`dist/` is gitignored and never committed on `develop`/`main` — GitHub
-Actions does not install dependencies for JavaScript actions at run time, so
-a real, working action still needs `dist/index.js` to exist somewhere, but
-that somewhere is a release tag, not the development branch (see
-"Releasing" below). Don't build-and-commit `dist/` locally; `npm run build`
-is for local verification only.
+`dist/` and `merge-report/index.js` are gitignored and never committed on
+`develop`/`main` — GitHub Actions does not install dependencies for
+JavaScript actions at run time, so a real, working action still needs its
+compiled entrypoint to exist somewhere, but that somewhere is a release tag,
+not the development branch (see "Releasing" below). Don't build-and-commit
+these locally; `npm run build` is for local verification only.
 
 ## Releasing
 

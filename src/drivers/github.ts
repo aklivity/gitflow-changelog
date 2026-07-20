@@ -203,6 +203,26 @@ function categorize(labels: string[], options: DriverOptions): Category {
   return 'issue';
 }
 
+// Same event-sourced label state entriesFromCache reads, but answering a
+// different question: not "how should this entry be categorized" (which
+// only ever runs against this repo's own enhancement/bug/exclude labels),
+// but "which commits, wherever they came from, are labeled in a way that
+// says they don't need to go anywhere else" — merge-report's use case,
+// where the label check has to run before any category is assigned and
+// doesn't care about enhancement vs. bug. Keyed by sha, not issue/PR
+// number, since that's what a `git cherry` candidate is identified by.
+export function excludedShas(cache: CacheFile, excludeLabels: string[]): Set<string> {
+  const shas = new Set<string>();
+  for (const entry of Object.values(cache.entries))
+  {
+    if (entry.sha && entry.labels.some((label) => excludeLabels.includes(label)))
+    {
+      shas.add(entry.sha);
+    }
+  }
+  return shas;
+}
+
 export function entriesFromCache(cache: CacheFile, options: DriverOptions): Entry[] {
   const entries: Entry[] = [];
   for (const [number, cacheEntry] of Object.entries(cache.entries))

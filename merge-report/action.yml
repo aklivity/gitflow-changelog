@@ -1,0 +1,91 @@
+name: gitflow-changelog merge-report
+description: >-
+  Reports gitflow branch pairs where a fix landed on one branch but its
+  content isn't present on another that should have it — by comparing
+  actual patch content, not merge-commit ancestry.
+author: Aklivity
+branding:
+  icon: git-merge
+  color: purple
+
+inputs:
+  owner:
+    description: Repository owner.
+    required: false
+    default: ${{ github.repository_owner }}
+  repo:
+    description: Repository name.
+    required: false
+    default: ${{ github.event.repository.name }}
+  token:
+    description: GitHub token used to read issues, pull requests, and their events.
+    required: false
+    default: ${{ github.token }}
+  source:
+    description: >-
+      Branch whose commits are checked for propagation, e.g. support/1.x.
+    required: true
+  targets:
+    description: >-
+      Comma-separated branches that should have every commit from `source`,
+      e.g. develop, or develop,support/2.x. Not assumed to be upstream of
+      `source` — a peer maintenance branch is a valid target too.
+    required: true
+  git-dir:
+    description: >-
+      Path to a full clone of the repository (requires fetch-depth 0 —
+      patch-content comparison needs full history). Defaults to the current
+      working directory.
+    required: false
+  cache-path:
+    description: >-
+      Path to the incremental events cache file. Shared with the
+      gitflow-changelog action — pair with actions/cache using the same
+      stable key so a warm changelog cache means this action makes no new
+      API calls of its own.
+    required: false
+    default: .gitflow-changelog-cache.json
+  merge-ignore-path:
+    description: >-
+      Path to a YAML file (in the consuming repo) listing commit shas that
+      are known not to need propagating, keyed by sha with a required
+      human-written reason. Auto-loaded from this default path if present —
+      no workflow changes needed to start using it.
+    required: false
+    default: .gitflow-changelog-merge-ignore.yml
+  config-path:
+    description: >-
+      Path to the same .gitflow-changelog.yml the changelog command reads —
+      only exclude-labels is consulted here, so a PR/issue labeled e.g.
+      "dependencies" is skipped the same way it's excluded from the
+      changelog, without a second label vocabulary to keep in sync.
+    required: false
+    default: .gitflow-changelog.yml
+  exclude-labels:
+    description: >-
+      Comma-separated labels whose PR/issue, if matched to a candidate
+      commit, drops it from the report. Overrides exclude-labels in
+      config-path; defaults to "duplicate,invalid,wontfix" if set in
+      neither place.
+    required: false
+  output-path:
+    description: Path to write the generated report to.
+    required: false
+    default: merge-report.md
+  fail-on-outstanding-after-days:
+    description: >-
+      Fail the run if any entry in the report has been outstanding longer
+      than this many days. The report itself always lists everything,
+      unfiltered, sorted oldest-first — this only controls whether the run
+      exits non-zero (and therefore triggers GitHub's default scheduled-
+      workflow-failure notification).
+    required: false
+    default: '14'
+
+outputs:
+  merge-report-path:
+    description: Path to the generated merge report.
+
+runs:
+  using: node20
+  main: index.js

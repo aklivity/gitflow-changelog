@@ -2,9 +2,19 @@
 import { parseArgs } from 'node:util';
 import { writeFile } from 'node:fs/promises';
 import { toRunOptions } from './config.js';
+import { runMergeReportCli } from './merge-report-cli.js';
 import { run } from './run.js';
 
 async function main(): Promise<void> {
+  // `merge-report` is a sibling subcommand, not a flag — anything else
+  // (including no positional arg at all) keeps today's flat-flags
+  // changelog behavior unchanged, so existing callers see no difference.
+  if (process.argv[2] === 'merge-report')
+  {
+    await runMergeReportCli(process.argv.slice(3));
+    return;
+  }
+
   const { values } = parseArgs({
     options: {
       owner: { type: 'string' },

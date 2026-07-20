@@ -224,3 +224,33 @@ export async function filesChangedInCommit(sha: string, options: GitOptions): Pr
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 }
+
+export interface CherryCommit {
+  sha: string;
+  subject: string;
+}
+
+// Parses `git cherry -v <target> <source>` and returns only the commits on
+// `source` marked '+' — patch content with no equivalent anywhere in
+// `target`'s history. Deliberately drops the '-' side (a patch-id match):
+// a commit re-applied under a new SHA on `source` — the normal shape of a
+// cherry-pick or an independently re-landed fix — is already present in
+// `target` in every way that matters here, even though a plain ancestry
+// diff (`git log target..source`) would still flag it as missing.
+export async function unmatchedCommits(target: string, source: string, options: GitOptions): Promise<CherryCommit[]> {
+  const stdout = await run(['cherry', '-v', target, source], options);
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('+ '))
+    .map((line) => {
+      const withoutMarker = line.slice(2);
+      const spaceIndex = withoutMarker.indexOf(' ');
+      return { sha: withoutMarker.slice(0, spaceIndex), subject: withoutMarker.slice(spaceIndex + 1) };
+    });
+}
+
+export async function commitDate(sha: string, options: GitOptions): Promise<string> {
+  const stdout = await run(['show', '-s', '--format=%cI', sha], options);
+  return stdout.trim();
+}

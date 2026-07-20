@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyCache } from '../src/cache.js';
-import { applyClosingReferences, applyEvent, entriesFromCache, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr, GithubRateLimitError } from '../src/drivers/github.js';
+import { applyClosingReferences, applyEvent, entriesFromCache, excludedShas, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr, GithubRateLimitError } from '../src/drivers/github.js';
 import type { DriverOptions } from '../src/types.js';
 
 const OPTIONS: DriverOptions = {
@@ -137,6 +137,51 @@ describe('applyEvent + entriesFromCache', () => {
     const [entry] = entriesFromCache(cache, OPTIONS);
     expect(entry.bot).toBe(true);
     expect(entry.login).toBe('dependabot[bot]');
+  });
+});
+
+describe('excludedShas', () => {
+  it('collects the sha of any entry whose labels intersect excludeLabels', () => {
+    const cache = emptyCache();
+    applyEvent(cache, {
+      id: 1,
+      event: 'merged',
+      commit_id: 'dep-sha',
+      issue: {
+        number: 900,
+        title: 'Bump some-lib',
+        user: issueUser('dependabot[bot]', true),
+        labels: [{ name: 'dependencies' }],
+        pull_request: { merged_at: '2024-01-01T00:00:00Z' },
+      },
+    });
+    applyEvent(cache, {
+      id: 2,
+      event: 'merged',
+      commit_id: 'real-fix-sha',
+      issue: {
+        number: 901,
+        title: 'fix crash',
+        user: issueUser('octocat'),
+        labels: [{ name: 'bug' }],
+        pull_request: { merged_at: '2024-01-01T00:00:00Z' },
+      },
+    });
+
+    expect(excludedShas(cache, ['dependencies'])).toEqual(new Set(['dep-sha']));
+  });
+
+  it('ignores an entry with no recorded sha', () => {
+    const cache = emptyCache();
+    applyEvent(cache, {
+      id: 1,
+      event: 'labeled',
+      commit_id: null,
+      issue: { number: 900, title: 'still open', user: issueUser('octocat'), labels: [{ name: 'dependencies' }] },
+      label: { name: 'dependencies' },
+    });
+
+    expect(excludedShas(cache, ['dependencies'])).toEqual(new Set());
   });
 });
 
