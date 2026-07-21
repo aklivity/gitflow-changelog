@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { commitDate, listBranches, resolveRef, unmatchedCommits } from '../src/git.js';
+import { commitDate, findCommitsContainingSubject, listBranches, resolveRef, unmatchedCommits } from '../src/git.js';
 import { createGitFixture, type GitFixture } from './git-fixture.js';
 
 const execFileAsync = promisify(execFile);
@@ -114,6 +114,46 @@ describe('resolveRef', () => {
     await execFileAsync('git', ['update-ref', 'refs/remotes/origin/support/1.x', 'refs/heads/support/1.x'], { cwd: fixture.dir });
 
     expect(await resolveRef('support/1.x', { cwd: fixture.dir })).toBe('origin/support/1.x');
+  });
+});
+
+describe('findCommitsContainingSubject', () => {
+  let fixture: GitFixture;
+
+  beforeEach(async () => {
+    fixture = await createGitFixture();
+  });
+
+  afterEach(async () => {
+    await fixture.cleanup();
+  });
+
+  it('finds a commit on ref whose subject contains the substring', async () => {
+    await fixture.commit('init');
+    const sha = await fixture.commit('fix: apply route topic rewrite to Metadata requests');
+
+    const found = await findCommitsContainingSubject('develop', 'apply route topic rewrite to Metadata requests', { cwd: fixture.dir });
+
+    expect(found.map((c) => c.sha)).toContain(sha);
+    expect(found.find((c) => c.sha === sha)?.subject).toBe('fix: apply route topic rewrite to Metadata requests');
+  });
+
+  it('returns an empty array when nothing matches', async () => {
+    await fixture.commit('init');
+
+    const found = await findCommitsContainingSubject('develop', 'nothing like this exists', { cwd: fixture.dir });
+
+    expect(found).toEqual([]);
+  });
+
+  it('treats the search string as a literal substring, not a regex', async () => {
+    await fixture.commit('init');
+    const sha = await fixture.commit('fix(binding-kafka-proxy): apply route topic rewrite (#962)');
+
+    // '(' and ')' would be regex metacharacters if not treated literally.
+    const found = await findCommitsContainingSubject('develop', 'fix(binding-kafka-proxy): apply route topic rewrite', { cwd: fixture.dir });
+
+    expect(found.map((c) => c.sha)).toContain(sha);
   });
 });
 

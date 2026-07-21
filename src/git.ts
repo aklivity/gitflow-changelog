@@ -288,3 +288,39 @@ export async function resolveRef(name: string, options: GitOptions): Promise<str
   const withOrigin = `origin/${name}`;
   return (await refExists(withOrigin, options)) ? withOrigin : name;
 }
+
+export interface CommitSubject {
+  sha: string;
+  subject: string;
+}
+
+// A field separator unlikely to appear in a subject line, used to split
+// git log's single stdout blob back into (sha, subject) pairs.
+const SUBJECT_FIELD_SEP = '\x1f';
+
+// `--grep` is a substring/regex match, not an exact one — this deliberately
+// returns every loose candidate rather than trying to decide exactness
+// itself, so callers (subject-match.ts) own the normalization+equality
+// check against what they searched for.
+export async function findCommitsContainingSubject(
+  ref: string,
+  substring: string,
+  options: GitOptions,
+): Promise<CommitSubject[]> {
+  const result = await runAllowFailure(
+    ['log', ref, '--fixed-strings', `--grep=${substring}`, `--format=%H${SUBJECT_FIELD_SEP}%s`],
+    options,
+  );
+  if (result.code !== 0)
+  {
+    return [];
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const sepIndex = line.indexOf(SUBJECT_FIELD_SEP);
+      return { sha: line.slice(0, sepIndex), subject: line.slice(sepIndex + 1) };
+    });
+}

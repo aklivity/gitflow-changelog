@@ -64,7 +64,7 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`${source}$`);
 }
 
-function matchesAny(path: string, patterns: string[]): boolean {
+export function matchesAny(path: string, patterns: string[]): boolean {
   return patterns.some((pattern) => globToRegExp(pattern).test(path));
 }
 

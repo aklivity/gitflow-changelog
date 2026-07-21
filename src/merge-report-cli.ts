@@ -20,6 +20,10 @@ export async function runMergeReportCli(argv: string[]): Promise<void> {
       'support-branch-pattern': { type: 'string' },
       target: { type: 'string' },
       sources: { type: 'string' },
+      'exclude-paths': { type: 'string' },
+      'exclude-message-patterns': { type: 'string' },
+      'subject-match': { type: 'string' },
+      'subject-match-min-overlap': { type: 'string' },
       output: { type: 'string', default: 'merge-report.md' },
     },
   });
@@ -37,6 +41,10 @@ export async function runMergeReportCli(argv: string[]): Promise<void> {
     supportBranchPattern: values['support-branch-pattern'],
     target: values.target,
     sources: values.sources,
+    excludePaths: values['exclude-paths'],
+    excludeMessagePatterns: values['exclude-message-patterns'],
+    subjectMatch: values['subject-match'],
+    subjectMatchMinOverlap: values['subject-match-min-overlap'],
   });
 
   const result = await mergeReport(options);

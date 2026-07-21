@@ -18,6 +18,15 @@ const RepoConfigSchema = z.object({
   // first group, compared numerically to order support branches).
   'mainline-branch': z.string().optional(),
   'support-branch-pattern': z.string().optional(),
+  // merge-report false-positive filtering, applied cheapest-first before
+  // falling through to exclude-labels/the ignore-list. exclude-paths has a
+  // safe built-in default (see merge-report-config.ts); exclude-message-
+  // patterns has none — those strings are a repo's own release-automation
+  // convention, never assumed.
+  'exclude-paths': z.array(z.string()).optional(),
+  'exclude-message-patterns': z.array(z.string()).optional(),
+  'subject-match': z.boolean().optional(),
+  'subject-match-min-overlap': z.number().optional(),
 });
 export type RepoConfig = z.infer<typeof RepoConfigSchema>;
 
