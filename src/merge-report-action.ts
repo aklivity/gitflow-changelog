@@ -18,6 +18,10 @@ async function main(): Promise<void> {
     supportBranchPattern: core.getInput('support-branch-pattern') || undefined,
     target: core.getInput('target') || undefined,
     sources: core.getInput('sources') || undefined,
+    excludePaths: core.getInput('exclude-paths') || undefined,
+    excludeMessagePatterns: core.getInput('exclude-message-patterns') || undefined,
+    subjectMatch: core.getInput('subject-match') || undefined,
+    subjectMatchMinOverlap: core.getInput('subject-match-min-overlap') || undefined,
   });
 
   const outputPath = core.getInput('output-path') || 'merge-report.md';

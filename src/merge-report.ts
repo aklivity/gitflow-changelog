@@ -1,7 +1,17 @@
+import { matchesAny } from './classification.js';
 import { loadCache, saveCache } from './cache.js';
 import { excludedShas, updateCache } from './drivers/github.js';
-import { commitDate, listBranches, resolveRef, unmatchedCommits } from './git.js';
+import {
+  commitDate,
+  filesChangedInCommit,
+  findCommitsContainingSubject,
+  listBranches,
+  resolveRef,
+  unmatchedCommits,
+} from './git.js';
+import type { CherryCommit } from './git.js';
 import { loadMergeIgnore } from './merge-ignore.js';
+import { fileOverlap, normalizeSubject } from './subject-match.js';
 import { computeTopology } from './topology.js';
 import type { BranchTopology } from './topology.js';
 
@@ -22,6 +32,25 @@ export interface MergeReportOptions {
   // both unset is the default, parameter-free full sweep.
   target?: string;
   sources?: string[];
+  // A candidate is dropped if EVERY changed path matches one of these globs
+  // — conservative: one file outside the set still shows up. Deliberately
+  // separate from classification.ts's DEFAULT_CLASSIFICATION_PATTERNS,
+  // which is tuned for "does this belong in the customer changelog" and
+  // treats examples/docs as noise — merge-report needs the opposite call,
+  // since a docs-only gap is exactly the kind of thing that must stay
+  // visible.
+  excludePaths: string[];
+  // Regexes tested against the full commit subject. No built-in default —
+  // scoped to a repo's own literal, deterministically machine-generated
+  // commit messages (e.g. a release workflow's fixed "Prepare release "
+  // template), never a general human/bot commit-message convention.
+  excludeMessagePatterns: string[];
+  // Second-opinion check for the dominant false-positive shape patch-id
+  // comparison can't see past: a backport PR renumbered on the target
+  // branch, with enough incidental diff drift to change the patch-id even
+  // though it's the same fix. See subject-match.ts.
+  subjectMatch: boolean;
+  subjectMatchMinOverlap: number;
 }
 
 export interface MergeReportEntry {
@@ -67,13 +96,60 @@ async function discoverTopology(options: MergeReportOptions): Promise<BranchTopo
   return [full.find((entry) => entry.target === options.target) ?? { target: options.target, sources: [] }];
 }
 
+function isPathExcluded(files: string[], excludePaths: string[]): boolean {
+  return files.length > 0 && excludePaths.length > 0 && files.every((file) => matchesAny(file, excludePaths));
+}
+
+// Cheapest-first: label/ignore-list lookups and a message-pattern test are
+// plain in-memory checks; path-exclude costs one git call; subject-match
+// costs a git log walk plus two more git calls, so it only ever runs once
+// nothing cheaper has already resolved the candidate.
+async function isExcluded(
+  candidate: CherryCommit,
+  targetRef: string,
+  excludedLabelShas: Set<string>,
+  ignoredShas: Map<string, string>,
+  options: MergeReportOptions,
+): Promise<boolean> {
+  if (excludedLabelShas.has(candidate.sha) || ignoredShas.has(candidate.sha))
+  {
+    return true;
+  }
+  if (options.excludeMessagePatterns.some((pattern) => new RegExp(pattern).test(candidate.subject)))
+  {
+    return true;
+  }
+
+  const files = await filesChangedInCommit(candidate.sha, { cwd: options.gitDir });
+  if (isPathExcluded(files, options.excludePaths))
+  {
+    return true;
+  }
+
+  if (!options.subjectMatch)
+  {
+    return false;
+  }
+
+  const normalized = normalizeSubject(candidate.subject);
+  const found = await findCommitsContainingSubject(targetRef, normalized, { cwd: options.gitDir });
+  const exact = found.find((commit) => normalizeSubject(commit.subject) === normalized);
+  if (!exact)
+  {
+    return false;
+  }
+
+  const targetFiles = await filesChangedInCommit(exact.sha, { cwd: options.gitDir });
+  return fileOverlap(files, targetFiles) >= options.subjectMatchMinOverlap;
+}
+
 export async function mergeReport(options: MergeReportOptions, now: Date = new Date()): Promise<MergeReportResult> {
   const cache = await loadCache(options.cachePath);
   await updateCache(cache, options);
   await saveCache(options.cachePath, cache);
 
-  const excluded = excludedShas(cache, options.excludeLabels);
-  const ignored = await loadMergeIgnore(options.mergeIgnorePath);
+  const excludedLabelShas = excludedShas(cache, options.excludeLabels);
+  const ignoredShas = await loadMergeIgnore(options.mergeIgnorePath);
   const topology = await discoverTopology(options);
 
   const outstanding: MergeReportEntry[] = [];
@@ -86,7 +162,7 @@ export async function mergeReport(options: MergeReportOptions, now: Date = new D
       const candidates = await unmatchedCommits(targetRef, sourceRef, { cwd: options.gitDir });
       for (const candidate of candidates)
       {
-        if (excluded.has(candidate.sha) || ignored.has(candidate.sha))
+        if (await isExcluded(candidate, targetRef, excludedLabelShas, ignoredShas, options))
         {
           continue;
         }

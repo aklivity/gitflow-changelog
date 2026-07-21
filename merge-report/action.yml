@@ -89,6 +89,44 @@ inputs:
       Comma-separated branches to check `target` against, replacing its
       auto-computed sources entirely. Only meaningful alongside `target`.
     required: false
+  exclude-paths:
+    description: >-
+      Comma-separated globs. A candidate commit is dropped only if EVERY
+      changed path matches one of these — one file outside the set still
+      shows up. Overrides exclude-paths in config-path; defaults to
+      ".github/**,CHANGELOG.md,.gitflow-changelog*.yml" if set in neither
+      place (safe across any repo — CI config, generated changelog
+      content, and this tool's own config files are never customer-facing).
+      Deliberately narrower than a "docs/examples don't count" rule — a
+      docs-only gap is exactly the kind of thing that must stay visible.
+    required: false
+  exclude-message-patterns:
+    description: >-
+      Comma-separated regular expressions tested against the full commit
+      subject. No built-in default — scoped to a repo's own literal,
+      deterministically machine-generated commit messages (e.g. a release
+      workflow's fixed "Prepare release " template), never a general
+      human/bot commit-message convention. Overrides exclude-message-
+      patterns in config-path.
+    required: false
+  subject-match:
+    description: >-
+      Whether to also drop a candidate whose subject (after stripping
+      trailing "(#NNN)" and "(backport...)" annotations) exactly matches a
+      commit already on the target branch, and whose changed-file sets
+      overlap enough (see subject-match-min-overlap) — the dominant false-
+      positive shape patch-id comparison alone can't see past: a backport
+      PR renumbered on the target branch, with enough incidental diff
+      drift to change the patch-id despite being the same fix. Overrides
+      subject-match in config-path; defaults to true if set in neither
+      place.
+    required: false
+  subject-match-min-overlap:
+    description: >-
+      Minimum Jaccard overlap (0-1) between two commits' changed-file sets
+      required before trusting a subject-match. Overrides subject-match-
+      min-overlap in config-path; defaults to 0.3 if set in neither place.
+    required: false
   output-path:
     description: Path to write the generated report to.
     required: false

@@ -302,7 +302,8 @@ forward-port. `merge-report` uses `git cherry -v target source` instead —
 patch-id comparison — so a commit re-applied under a new SHA on `source` is
 correctly recognized as already present on `target`.
 
-What's left after that still needs two more filters:
+What's left after that goes through four more filters, cheapest first,
+each one only running if nothing cheaper already resolved the candidate:
 
 - **`exclude-labels`** — the same list read from `.gitflow-changelog.yml`
   for changelog categorization. A candidate commit whose originating PR/issue
@@ -310,9 +311,43 @@ What's left after that still needs two more filters:
   it's excluded from the changelog — no second API sweep, just a second
   consumer of the event-sourced label state the Driver already fetches and
   caches.
+- **`exclude-paths`** — a candidate is dropped only if **every** changed
+  path matches one of these globs; one file outside the set still shows up.
+  Defaults to `.github/**,CHANGELOG.md,.gitflow-changelog*.yml` — safe
+  across any consuming repo, since CI config, generated changelog content,
+  and this tool's own config files are never customer-facing. Deliberately
+  **not** the existing feature/noise classification used for the upstream
+  fold-in feature (`classification.ts`'s `DEFAULT_CLASSIFICATION_PATTERNS`)
+  — that's tuned for "does this belong in the customer changelog," which
+  treats `examples/`/`docs/` as noise. For merge-report a docs-only gap is
+  exactly the kind of thing that has to stay visible; reusing that default
+  would silently hide it.
+- **`exclude-message-patterns`** — regexes tested against the full commit
+  subject. No built-in default: scoped deliberately narrow, to a repo's own
+  literal, deterministically machine-generated commit messages (e.g. a
+  release workflow's fixed `"Prepare release "` template), never a general
+  human/bot commit-message convention — commit-message *conventions* aren't
+  reliable enough to filter on (see subject-match below for why this
+  matters), but a fixed template a workflow emits verbatim every time is a
+  different, much more reliable kind of signal.
+- **Subject-normalization matching** (`subject-match`, on by default) — the
+  dominant real-world false-positive shape isn't release noise, it's a
+  *backport PR renumbered on the target branch*: the same fix, cherry-picked
+  with a new PR number and just enough incidental diff drift (unrelated
+  codebase divergence between the branches) to change the patch-id. Strip
+  every trailing `(#NNN)` group and a trailing `(backport...)` annotation
+  from the subject, and check whether the target branch already has a
+  commit with the identical normalized subject. If it does, additionally
+  require the two commits' changed-file sets to overlap (Jaccard) by at
+  least `subject-match-min-overlap` (default `0.3`) before trusting the
+  match — title collisions are rare but real, and requiring file overlap on
+  top costs nothing in the cases that matter, since a real match's files
+  stay far more stable than its line content across independent codebase
+  drift. Below the threshold, the candidate is **not** auto-resolved; it
+  still shows up, same as anything else needing a human call.
 - **`.gitflow-changelog-merge-ignore.yml`** — a checked-in, sha-keyed list
-  for the residual cases the label sweep can't resolve, each with a required
-  human-written reason:
+  for whatever survives all of the above, each with a required human-
+  written reason:
 
   ```yaml
   merge-ignore:
@@ -321,7 +356,20 @@ What's left after that still needs two more filters:
 
   Keyed by sha rather than a commit-message convention (`build(deps):`,
   "backport of #NNNN") — message conventions aren't consistent enough to
-  filter on reliably; a human's explicit, reviewed judgment is.
+  filter on reliably; a human's explicit, reviewed judgment is. In
+  practice, once the four filters above are in place, this list stays
+  small and stops growing on every new backport — confirmed against
+  `aklivity/zilla-plus`'s real history: 86 raw `git cherry` candidates
+  reduced to 9 (8 genuine one-off residue, 1 real gap) with zero ignore-list
+  entries needed for the recurring renumbered-backport shape.
+
+None of this is cached — deliberately consistent with `git cherry`/
+`commitDate`, which are also recomputed fresh every run. Every check above
+is local git (no GitHub API cost), and "found a subject-match" vs. "no
+match yet" isn't safe to cache without the same watermark discipline the
+events cache uses (a real match can appear on a later run once a backport
+actually lands) — not worth the complexity until an actual repo's scale
+makes it slow.
 
 ## Known limitations
 
