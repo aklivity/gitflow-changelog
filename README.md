@@ -56,7 +56,7 @@ something shipped in) and instead cross-references entry labels against
     path: .gitflow-changelog-cache.json
     key: gitflow-changelog-v1-${{ github.repository }} # stable key, not hash-based
 
-- uses: aklivity/gitflow-changelog@v1
+- uses: aklivity/gitflow-changelog@v0
   with:
     ref: support/1.x
 ```
@@ -256,7 +256,7 @@ supply the current branch topology, since there's nothing to supply.
     path: .gitflow-changelog-cache.json
     key: gitflow-changelog-v1-${{ github.repository }} # same cache the changelog action uses
 
-- uses: aklivity/gitflow-changelog/merge-report@v1
+- uses: aklivity/gitflow-changelog/merge-report@v0
 ```
 
 Run this on a schedule (weekly, say) plus `workflow_dispatch`, not on every
@@ -383,6 +383,32 @@ match yet" isn't safe to cache without the same watermark discipline the
 events cache uses (a real match can appear on a later run once a backport
 actually lands) — not worth the complexity until an actual repo's scale
 makes it slow.
+
+### Recommended: writing a port commit merge-report can recognize
+
+When you open a PR that ports a fix from one branch to another, follow one
+of these so merge-report resolves it automatically instead of the gap
+lingering as a false positive that needs a manual ignore-list entry:
+
+- **Full port** (the port carries the same change as the original, nothing
+  added or dropped): keep the original commit's exact `type(scope):
+  description` subject. Only the trailing `(#NNN)` PR-number reference
+  should differ — subject-normalization already strips that. Don't reword
+  the description or change the conventional-commit scope, even if it reads
+  awkwardly on the target branch — a differing scope (e.g. `docs(examples):`
+  vs. `docs(some-feature):`) is exactly the kind of thing that defeats
+  subject-match.
+- **Partial or reworded port** (e.g. the original bundled a version bump or
+  other change that doesn't apply on the target branch): no title
+  convention can bridge a genuine content difference, since both the
+  patch-id and the subject will legitimately differ. Add a `Ports:
+  <original-sha>` line to the commit body instead — merge-report trusts it
+  outright, no human follow-up needed. Confirmed working end-to-end on
+  `aklivity/zilla-plus`: PR #1054 ported #1043's routed-API-list change to
+  `develop` as a deliberately partial diff (some entries already existed
+  there independently); its commit body carries `Ports:
+  51d29db0f37695d8b479214dfeeab0f2c838a909`, and merge-report resolved the
+  gap on the very next scheduled run, with no ignore-list entry required.
 
 ## Known limitations
 
