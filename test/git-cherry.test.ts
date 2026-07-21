@@ -1,7 +1,14 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { commitDate, findCommitsContainingSubject, listBranches, resolveRef, unmatchedCommits } from '../src/git.js';
+import {
+  commitDate,
+  findCommitsContainingSubject,
+  listBranches,
+  resolveRef,
+  scanPortsTrailers,
+  unmatchedCommits,
+} from '../src/git.js';
 import { createGitFixture, type GitFixture } from './git-fixture.js';
 
 const execFileAsync = promisify(execFile);
@@ -154,6 +161,36 @@ describe('findCommitsContainingSubject', () => {
     const found = await findCommitsContainingSubject('develop', 'fix(binding-kafka-proxy): apply route topic rewrite', { cwd: fixture.dir });
 
     expect(found.map((c) => c.sha)).toContain(sha);
+  });
+});
+
+describe('scanPortsTrailers', () => {
+  let fixture: GitFixture;
+
+  beforeEach(async () => {
+    fixture = await createGitFixture();
+  });
+
+  afterEach(async () => {
+    await fixture.cleanup();
+  });
+
+  it('finds a Ports: trailer value in a commit body reachable from ref', async () => {
+    await fixture.commit('init');
+    await fixture.commit('chore(docker-image): add command-logs dependency\n\nPorts: 5a7e45294812fad54d63f9b2e88f226fec32179b');
+
+    const values = await scanPortsTrailers('develop', { cwd: fixture.dir });
+
+    expect(values).toContain('5a7e45294812fad54d63f9b2e88f226fec32179b');
+  });
+
+  it('returns an empty array when no commit carries a Ports: trailer', async () => {
+    await fixture.commit('init');
+    await fixture.commit('fix: ordinary commit with no trailer');
+
+    const values = await scanPortsTrailers('develop', { cwd: fixture.dir });
+
+    expect(values).toEqual([]);
   });
 });
 

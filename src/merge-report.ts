@@ -7,10 +7,12 @@ import {
   findCommitsContainingSubject,
   listBranches,
   resolveRef,
+  scanPortsTrailers,
   unmatchedCommits,
 } from './git.js';
 import type { CherryCommit } from './git.js';
 import { loadMergeIgnore } from './merge-ignore.js';
+import { portsTrailerMatches } from './ports-trailer.js';
 import { fileOverlap, normalizeSubject } from './subject-match.js';
 import { computeTopology } from './topology.js';
 import type { BranchTopology } from './topology.js';
@@ -51,6 +53,13 @@ export interface MergeReportOptions {
   // though it's the same fix. See subject-match.ts.
   subjectMatch: boolean;
   subjectMatchMinOverlap: number;
+  // Trusts an explicit `Ports: <sha>` trailer in a target-branch commit's
+  // body as an outright match for that sha — the escape hatch for a port
+  // whose content is a deliberate subset/superset of the original (e.g. it
+  // drops a version bump the target branch doesn't need), which changes
+  // both patch-id and subject enough that neither of the other heuristics
+  // can recognize the pairing on their own. See ports-trailer.ts.
+  portsTrailer: boolean;
 }
 
 export interface MergeReportEntry {
@@ -100,18 +109,25 @@ function isPathExcluded(files: string[], excludePaths: string[]): boolean {
   return files.length > 0 && excludePaths.length > 0 && files.every((file) => matchesAny(file, excludePaths));
 }
 
-// Cheapest-first: label/ignore-list lookups and a message-pattern test are
-// plain in-memory checks; path-exclude costs one git call; subject-match
-// costs a git log walk plus two more git calls, so it only ever runs once
-// nothing cheaper has already resolved the candidate.
+// Cheapest-first: label/ignore-list lookups, the ports-trailer check, and a
+// message-pattern test are plain in-memory checks (portsTrailerValues is
+// scanned once per target, before this runs per-candidate — see mergeReport
+// below); path-exclude costs one git call; subject-match costs a git log
+// walk plus two more git calls, so it only ever runs once nothing cheaper
+// has already resolved the candidate.
 async function isExcluded(
   candidate: CherryCommit,
   targetRef: string,
   excludedLabelShas: Set<string>,
   ignoredShas: Map<string, string>,
+  portsTrailerValues: string[],
   options: MergeReportOptions,
 ): Promise<boolean> {
   if (excludedLabelShas.has(candidate.sha) || ignoredShas.has(candidate.sha))
+  {
+    return true;
+  }
+  if (options.portsTrailer && portsTrailerMatches(candidate.sha, portsTrailerValues))
   {
     return true;
   }
@@ -156,13 +172,16 @@ export async function mergeReport(options: MergeReportOptions, now: Date = new D
   for (const { target, sources } of topology)
   {
     const targetRef = await resolveRef(target, { cwd: options.gitDir });
+    // Scanned once per target rather than once per candidate — see the
+    // isExcluded ordering comment above.
+    const portsTrailerValues = options.portsTrailer ? await scanPortsTrailers(targetRef, { cwd: options.gitDir }) : [];
     for (const source of sources)
     {
       const sourceRef = await resolveRef(source, { cwd: options.gitDir });
       const candidates = await unmatchedCommits(targetRef, sourceRef, { cwd: options.gitDir });
       for (const candidate of candidates)
       {
-        if (await isExcluded(candidate, targetRef, excludedLabelShas, ignoredShas, options))
+        if (await isExcluded(candidate, targetRef, excludedLabelShas, ignoredShas, portsTrailerValues, options))
         {
           continue;
         }

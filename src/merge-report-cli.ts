@@ -24,6 +24,7 @@ export async function runMergeReportCli(argv: string[]): Promise<void> {
       'exclude-message-patterns': { type: 'string' },
       'subject-match': { type: 'string' },
       'subject-match-min-overlap': { type: 'string' },
+      'ports-trailer': { type: 'string' },
       output: { type: 'string', default: 'merge-report.md' },
     },
   });
@@ -45,6 +46,7 @@ export async function runMergeReportCli(argv: string[]): Promise<void> {
     excludeMessagePatterns: values['exclude-message-patterns'],
     subjectMatch: values['subject-match'],
     subjectMatchMinOverlap: values['subject-match-min-overlap'],
+    portsTrailer: values['ports-trailer'],
   });
 
   const result = await mergeReport(options);

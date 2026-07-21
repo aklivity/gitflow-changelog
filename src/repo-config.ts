@@ -27,6 +27,12 @@ const RepoConfigSchema = z.object({
   'exclude-message-patterns': z.array(z.string()).optional(),
   'subject-match': z.boolean().optional(),
   'subject-match-min-overlap': z.number().optional(),
+  // Trusts an explicit `Ports: <sha>` trailer in a target-branch commit's
+  // body as an outright match — the escape hatch for a port whose content
+  // is a deliberate subset/superset of the original, which changes both
+  // patch-id and subject enough that neither of the checks above can
+  // recognize the pairing on their own.
+  'ports-trailer': z.boolean().optional(),
 });
 export type RepoConfig = z.infer<typeof RepoConfigSchema>;
 
