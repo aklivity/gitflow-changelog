@@ -302,7 +302,7 @@ forward-port. `merge-report` uses `git cherry -v target source` instead —
 patch-id comparison — so a commit re-applied under a new SHA on `source` is
 correctly recognized as already present on `target`.
 
-What's left after that goes through four more filters, cheapest first,
+What's left after that goes through five more filters, cheapest first,
 each one only running if nothing cheaper already resolved the candidate:
 
 - **`exclude-labels`** — the same list read from `.gitflow-changelog.yml`
@@ -311,6 +311,19 @@ each one only running if nothing cheaper already resolved the candidate:
   it's excluded from the changelog — no second API sweep, just a second
   consumer of the event-sourced label state the Driver already fetches and
   caches.
+- **`ports-trailer`** (on by default) — a `Ports: <sha>` line in a
+  target-branch commit's body, asserting it carries forward that specific
+  source-branch commit. This is the escape hatch for a port whose content
+  is a deliberate subset or superset of the original — e.g. the original
+  bundled an unrelated version bump the target branch's own version already
+  covers — which changes both the patch-id and the subject enough that
+  neither of the other checks can recognize the pairing on their own. Unlike
+  subject-match below, a trailer match is a human assertion, not a
+  heuristic: it's trusted outright, no file-overlap confirmation required.
+  The trailer value may be a full or abbreviated sha (a prefix match against
+  the candidate's full sha, same convention `git log <prefix>` itself
+  accepts). Scanned once per target branch, so per-candidate this is a
+  plain in-memory check — cheap enough to run this early.
 - **`exclude-paths`** — a candidate is dropped only if **every** changed
   path matches one of these globs; one file outside the set still shows up.
   Defaults to `.github/**,CHANGELOG.md,.gitflow-changelog*.yml` — safe

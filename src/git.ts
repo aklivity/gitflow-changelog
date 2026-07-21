@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { parsePortsTrailers } from './ports-trailer.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -287,6 +288,20 @@ async function refExists(ref: string, options: GitOptions): Promise<boolean> {
 export async function resolveRef(name: string, options: GitOptions): Promise<string> {
   const withOrigin = `origin/${name}`;
   return (await refExists(withOrigin, options)) ? withOrigin : name;
+}
+
+// Every `Ports: <sha>` trailer value found anywhere in `ref`'s history, in a
+// single history walk — the batched form of grepping per-candidate, matching
+// the scanCommitsReferencingNumbers pattern above. Values are returned
+// exactly as written (parsePortsTrailers lowercases them); merge-report
+// checks each candidate's sha against this list with portsTrailerMatches.
+export async function scanPortsTrailers(ref: string, options: GitOptions): Promise<string[]> {
+  const result = await runAllowFailure(['log', ref, `--format=%B${RECORD_SEP}`], options);
+  if (result.code !== 0)
+  {
+    return [];
+  }
+  return result.stdout.split(RECORD_SEP).flatMap((body) => parsePortsTrailers(body));
 }
 
 export interface CommitSubject {

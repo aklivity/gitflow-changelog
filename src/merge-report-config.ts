@@ -18,6 +18,7 @@ export interface RawMergeReportInputs {
   excludeMessagePatterns?: string;
   subjectMatch?: string;
   subjectMatchMinOverlap?: string;
+  portsTrailer?: string;
 }
 
 // Safe across any consuming repo: CI config, generated changelog content,
@@ -99,5 +100,8 @@ export async function toMergeReportOptions(raw: RawMergeReportInputs): Promise<M
       ? parseBoolean(raw.subjectMatch, true)
       : fileConfig['subject-match'] ?? true,
     subjectMatchMinOverlap: overlapInput ?? fileConfig['subject-match-min-overlap'] ?? 0.3,
+    portsTrailer: raw.portsTrailer !== undefined
+      ? parseBoolean(raw.portsTrailer, true)
+      : fileConfig['ports-trailer'] ?? true,
   };
 }

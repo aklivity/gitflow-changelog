@@ -127,6 +127,18 @@ inputs:
       required before trusting a subject-match. Overrides subject-match-
       min-overlap in config-path; defaults to 0.3 if set in neither place.
     required: false
+  ports-trailer:
+    description: >-
+      Whether to trust an explicit "Ports: <sha>" line in a target-branch
+      commit's body as an outright match for that sha — the escape hatch
+      for a port whose content is a deliberate subset/superset of the
+      original (e.g. it drops a version bump the target branch doesn't
+      need), which changes both patch-id and subject enough that neither
+      of the checks above can recognize the pairing on their own. The
+      trailer value may be a full or abbreviated sha. Overrides
+      ports-trailer in config-path; defaults to true if set in neither
+      place.
+    required: false
   output-path:
     description: Path to write the generated report to.
     required: false

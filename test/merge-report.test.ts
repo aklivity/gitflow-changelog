@@ -54,6 +54,7 @@ function baseOptions(fixture: GitFixture, cachePath: string): MergeReportOptions
     excludeMessagePatterns: [],
     subjectMatch: true,
     subjectMatchMinOverlap: 0.3,
+    portsTrailer: true,
   };
 }
 
@@ -285,5 +286,61 @@ describe('mergeReport', () => {
     const result = await mergeReport({ ...baseOptions(fixture, cachePath), subjectMatch: false }, NOW);
 
     expect(result.outstanding.map((entry) => entry.sha)).toContain(backportSha);
+  });
+
+  it('drops a candidate referenced by a full-sha Ports: trailer on the target branch', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.checkout('support/1.x');
+    const originalSha = await fixture.commit('chore(docker-image): bump zilla.version, add command-logs');
+
+    await fixture.checkout('develop');
+    await fixture.commit(`chore(docker-image): add command-logs dependency\n\nPorts: ${originalSha}`);
+
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
+
+    expect(result.outstanding.map((entry) => entry.sha)).not.toContain(originalSha);
+  });
+
+  it('drops a candidate referenced by an abbreviated Ports: trailer', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.checkout('support/1.x');
+    const originalSha = await fixture.commit('chore(docker-image): bump zilla.version, add command-logs');
+
+    await fixture.checkout('develop');
+    await fixture.commit(`chore(docker-image): add command-logs dependency\n\nPorts: ${originalSha.slice(0, 10)}`);
+
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
+
+    expect(result.outstanding.map((entry) => entry.sha)).not.toContain(originalSha);
+  });
+
+  it('keeps a candidate that a Ports: trailer on the target does not reference', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.checkout('support/1.x');
+    const unrelatedSha = await fixture.commit('fix: genuinely unrelated to any port');
+
+    await fixture.checkout('develop');
+    await fixture.commit('chore(docker-image): add command-logs dependency\n\nPorts: 0123456789abcdef0123456789abcdef01234567');
+
+    const result = await mergeReport(baseOptions(fixture, cachePath), NOW);
+
+    expect(result.outstanding.map((entry) => entry.sha)).toContain(unrelatedSha);
+  });
+
+  it('does not apply ports-trailer matching at all when disabled, even with a matching trailer present', async () => {
+    await fixture.commit('init');
+    await fixture.branch('support/1.x');
+    await fixture.checkout('support/1.x');
+    const originalSha = await fixture.commit('chore(docker-image): bump zilla.version, add command-logs');
+
+    await fixture.checkout('develop');
+    await fixture.commit(`chore(docker-image): add command-logs dependency\n\nPorts: ${originalSha}`);
+
+    const result = await mergeReport({ ...baseOptions(fixture, cachePath), portsTrailer: false }, NOW);
+
+    expect(result.outstanding.map((entry) => entry.sha)).toContain(originalSha);
   });
 });

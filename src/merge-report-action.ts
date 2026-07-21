@@ -22,6 +22,7 @@ async function main(): Promise<void> {
     excludeMessagePatterns: core.getInput('exclude-message-patterns') || undefined,
     subjectMatch: core.getInput('subject-match') || undefined,
     subjectMatchMinOverlap: core.getInput('subject-match-min-overlap') || undefined,
+    portsTrailer: core.getInput('ports-trailer') || undefined,
   });
 
   const outputPath = core.getInput('output-path') || 'merge-report.md';
