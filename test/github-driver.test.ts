@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyCache } from '../src/cache.js';
-import { applyClosingReferences, applyEvent, entriesFromCache, excludedShas, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr, GithubRateLimitError } from '../src/drivers/github.js';
+import { applyClosingReferences, applyEvent, entriesFromCache, excludedShas, fetchDefaultBranch, fetchPullRequestBaseRef, findSquashMergePr, GithubRateLimitError, walkNewEvents } from '../src/drivers/github.js';
 import type { DriverOptions } from '../src/types.js';
 
 const OPTIONS: DriverOptions = {
@@ -318,6 +318,122 @@ function primaryRateLimitResponse(): Response {
 function secondaryRateLimitResponse(): Response {
   return jsonResponse(403, { message: 'You have exceeded a secondary rate limit' }, { 'retry-after': '60' });
 }
+
+function issueEvent(id: number) {
+  return {
+    id,
+    event: 'labeled',
+    commit_id: null,
+    issue: { number: id, title: `event ${id}`, user: issueUser('octocat'), labels: [] },
+  };
+}
+
+function pageResponse(events: ReturnType<typeof issueEvent>[], lastPage: number | undefined): Response {
+  const headers: Record<string, string> = lastPage === undefined
+    ? {}
+    : { link: `<https://api.github.com/repos/acme/widget/issues/events?page=${lastPage}>; rel="last"` };
+  return jsonResponse(200, events, headers);
+}
+
+function pageOf(url: string): number {
+  return Number(new URL(url).searchParams.get('page'));
+}
+
+describe('walkNewEvents', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns every event when everything fits on a single page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => pageResponse([issueEvent(1), issueEvent(2)], undefined)));
+
+    const events = await walkNewEvents('acme', 'widget', 'token', 0);
+
+    expect(events.map((event) => event.id)).toEqual([1, 2]);
+  });
+
+  it('stops walking backward once a page has nothing newer than lastEventId', async () => {
+    // 5 pages total, no drift. Only pages 4 and 5 have anything newer than
+    // lastEventId=30; page 3 has nothing new and should end the walk before
+    // pages 2 or 1 (beyond the initial bootstrap fetch) are ever requested.
+    const fetchMock = vi.fn(async (url: string) => {
+      const page = pageOf(url);
+      const byPage: Record<number, ReturnType<typeof issueEvent>[]> = {
+        1: [issueEvent(10)],
+        2: [issueEvent(20)],
+        3: [issueEvent(25)],
+        4: [issueEvent(40)],
+        5: [issueEvent(50)],
+      };
+      return pageResponse(byPage[page], 5);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events = await walkNewEvents('acme', 'widget', 'token', 30);
+
+    expect(events.map((event) => event.id)).toEqual([40, 50]);
+    // Bootstrap (page 1) + page 5 + page 4 + page 3 (empty, ends the walk).
+    // Pages 2 and beyond must never be requested.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls.map(([url]) => pageOf(url as string)).sort((a, b) => a - b)).toEqual([1, 3, 4, 5]);
+  });
+
+  // The regression case: a naive "compute the last page once, from the
+  // very first request" walk would stop at page 3 and never learn page 4
+  // exists at all — silently dropping event 4 with no error anywhere. This
+  // is the exact shape of aklivity/zilla-plus#1073/#1075 going missing from
+  // a real changelog run.
+  it('picks up a page that appears only after the walk has already started (pagination drift)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const page = pageOf(url);
+      if (page === 1)
+      {
+        // At the moment of this request, only 3 pages exist.
+        return pageResponse([issueEvent(1)], 3);
+      }
+      if (page === 3)
+      {
+        // By the time page 3 is fetched, a new event has pushed the total
+        // to 4 pages — discovered here, mid-walk, not at the start.
+        return pageResponse([issueEvent(3)], 4);
+      }
+      if (page === 4)
+      {
+        return pageResponse([issueEvent(4)], 4);
+      }
+      if (page === 2)
+      {
+        return pageResponse([issueEvent(2)], 4);
+      }
+      throw new Error(`unexpected page ${page}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events = await walkNewEvents('acme', 'widget', 'token', 0);
+
+    expect(events.map((event) => event.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('deduplicates an event refetched twice across the recursive drift-handling paths', async () => {
+    // Drift is discovered twice in a row (3 -> 4, then 4 -> 5), and the
+    // walk must still land on each real event exactly once.
+    const fetchMock = vi.fn(async (url: string) => {
+      const page = pageOf(url);
+      if (page === 1) return pageResponse([issueEvent(1)], 3);
+      if (page === 3) return pageResponse([issueEvent(3)], 4);
+      if (page === 4) return pageResponse([issueEvent(4)], 5);
+      if (page === 5) return pageResponse([issueEvent(5)], 5);
+      if (page === 2) return pageResponse([issueEvent(2)], 5);
+      throw new Error(`unexpected page ${page}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const events = await walkNewEvents('acme', 'widget', 'token', 0);
+
+    expect(events.map((event) => event.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(new Set(events.map((event) => event.id)).size).toBe(5);
+  });
+});
 
 describe('fetchPullRequestBaseRef', () => {
   afterEach(() => {

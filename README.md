@@ -204,46 +204,59 @@ Resolution order, highest precedence first:
    tier: the entry is dropped and a warning names the PR/issue and the
    unresolvable SHA, so a human can add an explicit override.
 
-## Completeness check: catching entries the driver silently dropped
+## Making sure the driver never silently drops a merged PR
 
-Every failure mode above produces a visible warning. There's a worse
-failure mode that doesn't: the GitHub driver's own PR discovery
-(`walkNewEvents` in `src/drivers/github.ts`) walks a repo-wide, paginated
-`/issues/events` feed and persists what it's seen across runs via a cached
-watermark. If that walk ever fails to pick up a merged PR's event —
-pagination drift while new events keep landing mid-walk, an eventually-
-consistent read racing a just-merged PR, a corrupted or unexpectedly-shared
-cache — the PR simply never appears anywhere: not in the rendered
-changelog, not in a warning, not in anything. The run still reports success.
+The GitHub driver's PR discovery (`walkNewEvents` in `src/drivers/github.ts`)
+walks a repo-wide, paginated `/issues/events` feed and persists what it's
+seen across runs via a cached watermark, so each run only re-fetches what's
+new since the last one instead of the repo's entire history. This happened
+for real and shipped a wrong release: aklivity/zilla-plus#1073 and #1075 both
+squash-merged into `support/1.x` before the 1.4.3 release, both are correctly
+contained by the `1.4.3` tag (confirmed directly with `git tag --contains`),
+yet neither ever showed up in the fetched entries or any warning when 1.4.3
+was cut — `CHANGELOG.md` shipped silently missing both, on an all-green
+workflow.
 
-This happened for real: aklivity/zilla-plus#1073 and #1075 both squash-merged
-into `support/1.x` before the 1.4.3 release, both are correctly contained by
-the `1.4.3` tag (confirmed directly with `git tag --contains`), and neither
-ever showed up in the fetched entries or any warning when 1.4.3 was cut.
-`CHANGELOG.md` shipped silently missing both, and the workflow was green.
+**Root cause and fix.** The walk finds the newest page once (via the `Link`
+header on an initial request) and then walks backward from there toward page
+1, stopping at the first page with nothing newer than the cached watermark —
+an optimization that avoids re-walking a large repo's full history every run,
+since new events are always clustered near the end. On a live, active repo,
+that "newest page" figure can change *during* the walk itself: if any new
+event lands between the initial request and a later one in the same walk,
+the true page count grows, page boundaries shift, and whatever falls in the
+newly-revealed range is silently never fetched at any page number at all —
+exactly what happened to #1073/#1075. The fix: every page fetched during the
+walk re-checks its own `Link` header against the highest page number seen so
+far, and if it's grown, the newly-revealed pages are walked first (before the
+original walk is allowed to continue or stop) — covering drift discovered at
+any point mid-walk, not only drift already present when the walk started.
+Covered directly in `test/github-driver.test.ts`, including a dedicated
+regression test that reproduces the #1073/#1075 shape (a page number
+appearing only after the walk that would have missed it has already begun)
+and asserts every event is still returned exactly once.
 
-To catch this class of bug regardless of its exact cause, every run now
-cross-checks the driver's output against an independent ground truth: `git
-log` itself, over the exact range this run is about to render (the previous
-release tag to `ref`, or the full history on the very first release). Any
-commit whose subject matches GitHub's own "this commit is PR #NNN"
-conventions — a squash-merge's trailing `(#NNN)`, or a real merge commit's
-`Merge pull request #NNN from ...` — must have a corresponding number
-somewhere in the entries the driver fetched (resolved or not; excluded
-label filtering isn't distinguished here, so a legitimately excluded PR that
-matches one of these subject shapes will also be flagged — an accepted
-false positive, since the alternative is another silent gap). Anything
-`git log` says merged that the driver never saw is a completeness issue.
-
-Unlike every other warning in this tool, a completeness issue **fails the
-run** (`core.setFailed` in the Action, a non-zero exit code from the CLI) —
-deliberately louder than a warning, because the CHANGELOG.md written by a
-run with completeness issues is known to be wrong, not just possibly
-incomplete. The file is still written (a changelog missing a couple of
-entries is more useful than none), but the run itself must not look green.
-If this fires, don't just re-run it: figure out why the driver missed the
-PR, and consider filing an issue against this repo referencing the affected
-PR numbers along with your findings.
+**Backstop for anything this doesn't anticipate.** Fixing the one known
+mechanism doesn't rule out every possible way a driver could someday drop an
+entry, so every run also cross-checks its own output against an independent
+ground truth: `git log` itself, over the exact range this run is about to
+render (the previous release tag to `ref`, or the full history on the very
+first release). Any commit whose subject matches GitHub's own "this commit
+is PR #NNN" conventions — a squash-merge's trailing `(#NNN)`, or a real merge
+commit's `Merge pull request #NNN from ...` — must have a corresponding
+number somewhere in the entries the driver fetched (resolved or not;
+excluded-label filtering isn't distinguished here, so a legitimately
+excluded PR that matches one of these subject shapes will also be flagged —
+an accepted false positive, since the alternative is another silent gap).
+Anything `git log` says merged that the driver never saw is a completeness
+issue, and unlike every other warning in this tool, it **fails the run**
+(`core.setFailed` in the Action, a non-zero exit code from the CLI) — a
+changelog known to be wrong is worse than a failed build, since a failed
+build can't be missed. The file is still written (a changelog missing a
+couple of entries is more useful than none), but the run itself must not
+look green. If this ever fires, don't just re-run it: it means something
+*other* than the pagination-drift case above caused the gap — figure out
+what, and consider filing an issue against this repo with the details.
 
 ## merge-report: did a fix propagate everywhere it needs to?
 
