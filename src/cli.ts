@@ -52,14 +52,26 @@ async function main(): Promise<void> {
     format: values.format,
   });
 
-  const { markdown, warnings } = await run(options);
+  const { markdown, warnings, completenessIssues } = await run(options);
 
   for (const warning of warnings)
   {
     process.stderr.write(`warning: ${warning}\n`);
   }
 
+  // Written regardless of completenessIssues below — see action.ts for why.
   await writeFile(values.output as string, markdown, 'utf8');
+
+  if (completenessIssues.length > 0)
+  {
+    const details = completenessIssues.map((issue) => `#${issue.number} (${issue.sha})`).join(', ');
+    process.stderr.write(
+      `error: changelog completeness check failed: git history shows ${completenessIssues.length} merged PR(s) ` +
+        `in this release that never appeared in the fetched entries — ${details}. ${values.output as string} was ` +
+        'still written with whatever entries were found, but it is missing these.\n',
+    );
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error: unknown) => {

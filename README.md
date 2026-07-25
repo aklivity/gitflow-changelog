@@ -204,6 +204,47 @@ Resolution order, highest precedence first:
    tier: the entry is dropped and a warning names the PR/issue and the
    unresolvable SHA, so a human can add an explicit override.
 
+## Completeness check: catching entries the driver silently dropped
+
+Every failure mode above produces a visible warning. There's a worse
+failure mode that doesn't: the GitHub driver's own PR discovery
+(`walkNewEvents` in `src/drivers/github.ts`) walks a repo-wide, paginated
+`/issues/events` feed and persists what it's seen across runs via a cached
+watermark. If that walk ever fails to pick up a merged PR's event —
+pagination drift while new events keep landing mid-walk, an eventually-
+consistent read racing a just-merged PR, a corrupted or unexpectedly-shared
+cache — the PR simply never appears anywhere: not in the rendered
+changelog, not in a warning, not in anything. The run still reports success.
+
+This happened for real: aklivity/zilla-plus#1073 and #1075 both squash-merged
+into `support/1.x` before the 1.4.3 release, both are correctly contained by
+the `1.4.3` tag (confirmed directly with `git tag --contains`), and neither
+ever showed up in the fetched entries or any warning when 1.4.3 was cut.
+`CHANGELOG.md` shipped silently missing both, and the workflow was green.
+
+To catch this class of bug regardless of its exact cause, every run now
+cross-checks the driver's output against an independent ground truth: `git
+log` itself, over the exact range this run is about to render (the previous
+release tag to `ref`, or the full history on the very first release). Any
+commit whose subject matches GitHub's own "this commit is PR #NNN"
+conventions — a squash-merge's trailing `(#NNN)`, or a real merge commit's
+`Merge pull request #NNN from ...` — must have a corresponding number
+somewhere in the entries the driver fetched (resolved or not; excluded
+label filtering isn't distinguished here, so a legitimately excluded PR that
+matches one of these subject shapes will also be flagged — an accepted
+false positive, since the alternative is another silent gap). Anything
+`git log` says merged that the driver never saw is a completeness issue.
+
+Unlike every other warning in this tool, a completeness issue **fails the
+run** (`core.setFailed` in the Action, a non-zero exit code from the CLI) —
+deliberately louder than a warning, because the CHANGELOG.md written by a
+run with completeness issues is known to be wrong, not just possibly
+incomplete. The file is still written (a changelog missing a couple of
+entries is more useful than none), but the run itself must not look green.
+If this fires, don't just re-run it: figure out why the driver missed the
+PR, and consider filing an issue against this repo referencing the affected
+PR numbers along with your findings.
+
 ## merge-report: did a fix propagate everywhere it needs to?
 
 `gitflow-changelog` answers "which release did this fix ship in." A related,
@@ -424,6 +465,11 @@ lingering as a false positive that needs a manual ignore-list entry:
   that PR's merge commit instead — the repo-wide `/issues/events` feed's own
   `closed` event only carries a `commit_id` for direct-commit closes, not
   ones closed via a linked PR.
+- The completeness check (above) only recognizes GitHub's own squash-merge
+  and merge-commit subject conventions — a repo using a different merge
+  style (e.g. plain fast-forward merges with no distinguishing subject) gets
+  no coverage from it, silently. It's a safety net for the common case, not
+  a guarantee.
 
 ## Development
 

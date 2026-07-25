@@ -261,3 +261,84 @@ describe('run — upstream fold-in wiring', () => {
     expect(result.warnings.some((warning) => warning.includes('#3010'))).toBe(false);
   });
 });
+
+// See aklivity/zilla-plus#1073/#1075: both squash-merged into support/1.x
+// with no error or warning anywhere, yet both were absent from the driver's
+// fetched entries when 1.4.3 was cut — CHANGELOG.md silently shipped
+// incomplete. completenessIssues exists to make exactly this case loud
+// instead of invisible; these tests exercise it through run() end-to-end
+// rather than just unit-testing checkCompleteness in isolation, so a
+// regression in the run.ts wiring (wrong range, wrong knownNumbers set)
+// would fail here even if completeness.ts itself were still correct.
+describe('run — completeness check', () => {
+  let repo: GitFixture;
+
+  beforeEach(async () => {
+    repo = await createGitFixture();
+  });
+
+  afterEach(async () => {
+    await repo.cleanup();
+  });
+
+  async function baseOptions(overrides: Partial<Parameters<typeof run>[0]> = {}) {
+    return {
+      owner: 'acme',
+      repo: 'app',
+      token: 't',
+      ref: 'develop',
+      gitDir: repo.dir,
+      cachePath: join(repo.dir, '.gitflow-changelog-cache.json'),
+      upstreamCacheDir: await mkdtemp(join(tmpdir(), 'gitflow-changelog-upstream-cache-')),
+      tagPattern: /^v\d+\.\d+\.\d+$/,
+      enhancementLabels: ['enhancement'],
+      bugLabels: ['bug'],
+      excludeLabels: [],
+      format: 'default',
+      upstream: [],
+      ...overrides,
+    };
+  }
+
+  it('flags a squash-merged PR that git history shows but the driver never fetched', async () => {
+    await repo.commit('base');
+    // Merged into git history with a real squash-merge subject, but never
+    // returned by fetchEntries — the exact shape of the driver silently
+    // dropping an entry.
+    await repo.commit('fix(engine): support EKS for metering (#1073)');
+
+    vi.spyOn(GithubDriver.prototype, 'fetchEntries').mockResolvedValue([]);
+
+    const result = await run(await baseOptions());
+
+    expect(result.completenessIssues).toEqual([{ number: 1073, sha: expect.any(String) }]);
+  });
+
+  it('reports no completeness issues once the driver-fetched entry matches git history', async () => {
+    await repo.commit('base');
+    const sha = await repo.commit('fix(engine): support EKS for metering (#1073)');
+
+    vi.spyOn(GithubDriver.prototype, 'fetchEntries').mockResolvedValue([
+      entry({ number: 1073, title: 'support EKS for metering', sha }),
+    ]);
+
+    const result = await run(await baseOptions());
+
+    expect(result.completenessIssues).toEqual([]);
+  });
+
+  it('only checks the newly-tagged range, not a tag already fully released', async () => {
+    await repo.commit('fix(old): already released (#100)');
+    await repo.tag('v1.0.0', '2024-01-01T00:00:00Z');
+    const newSha = await repo.commit('fix(new): just merged (#200)');
+
+    // Neither #100 nor #200 is returned by the driver, but only #200 falls
+    // within the range this run is actually rendering (v1.0.0..develop) —
+    // #100's gap belongs to v1.0.0's own already-published run, not this one.
+    vi.spyOn(GithubDriver.prototype, 'fetchEntries').mockResolvedValue([]);
+
+    const result = await run(await baseOptions());
+
+    expect(result.completenessIssues).toEqual([{ number: 200, sha: newSha }]);
+  });
+});
