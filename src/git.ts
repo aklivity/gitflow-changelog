@@ -339,3 +339,35 @@ export async function findCommitsContainingSubject(
       return { sha: line.slice(0, sepIndex), subject: line.slice(sepIndex + 1) };
     });
 }
+
+// Every commit reachable via `range` (a single ref, or a `from..to` range
+// expression — git accepts both as one positional revision argument), with
+// its subject line only, not the full body. Used by completeness.ts to
+// cross-check the entries a driver fetched against what the git history
+// itself says actually merged in that range — a plain, uncached,
+// eventually-consistent-free read that can't be affected by the same
+// pagination/watermark bugs a repo-wide event-log walk is exposed to.
+export async function listCommitSubjects(range: string, options: GitOptions): Promise<CommitSubject[]> {
+  const result = await runAllowFailure(['log', range, `--format=%H${SUBJECT_FIELD_SEP}%s`], options);
+  if (result.code !== 0)
+  {
+    return [];
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const sepIndex = line.indexOf(SUBJECT_FIELD_SEP);
+      return { sha: line.slice(0, sepIndex), subject: line.slice(sepIndex + 1) };
+    });
+}
+
+// Resolves any revision expression to the full commit sha it currently
+// points at — used to tell "ref is exactly this tag" apart from "ref is
+// ahead of every known tag" when deciding which range completeness.ts
+// should check (see determinePreviousTag in run.ts).
+export async function resolveCommit(ref: string, options: GitOptions): Promise<string> {
+  const stdout = await run(['rev-parse', ref], options);
+  return stdout.trim();
+}

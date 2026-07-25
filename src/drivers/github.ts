@@ -72,6 +72,72 @@ async function fetchEventsPage(
   return { events, lastPage };
 }
 
+function collectNew(
+  events: GithubIssueEvent[],
+  lastEventId: number,
+  seen: Set<number>,
+  collected: GithubIssueEvent[],
+): boolean {
+  let addedAny = false;
+  for (const event of events)
+  {
+    if (event.id > lastEventId && !seen.has(event.id))
+    {
+      seen.add(event.id);
+      collected.push(event);
+      addedAny = true;
+    }
+  }
+  return addedAny;
+}
+
+// Walks pages `from` down to `downTo` (inclusive), newest-first, stopping
+// early the first time a page yields nothing new — new events are always
+// clustered near the end, so this avoids re-walking a large repo's entire
+// history every run. `ceiling` tracks the highest page number known to
+// exist; every fetched page's own Link header is re-checked against it, and
+// if a page reports a HIGHER total than `ceiling.value`, the newly-revealed
+// range is walked first (newest-first, same stopping rule, recursively) —
+// covering an event that landed anywhere during this walk, not only one
+// present before it started — before this call's own remaining pages
+// continue from where they were.
+//
+// This is what a naive "compute the last page once, from the very first
+// request, then walk that fixed range" version gets wrong on a live repo:
+// if any new event lands between that first request and a later one in the
+// same walk, the true last page grows, page boundaries shift, and whatever
+// falls in the newly-revealed range is silently never fetched at any page
+// number — see aklivity/zilla-plus#1073/#1075, both squash-merged within
+// the same rough window of activity as a release run that missed them
+// entirely, with no error or warning anywhere.
+async function walkRange(
+  owner: string,
+  repo: string,
+  token: string,
+  lastEventId: number,
+  from: number,
+  downTo: number,
+  ceiling: { value: number },
+  seen: Set<number>,
+  collected: GithubIssueEvent[],
+): Promise<void> {
+  for (let page = from; page >= downTo; page -= 1)
+  {
+    const { events, lastPage } = await fetchEventsPage(owner, repo, page, token);
+    if (lastPage !== undefined && lastPage > ceiling.value)
+    {
+      const revealedFrom = lastPage;
+      const revealedDownTo = ceiling.value + 1;
+      ceiling.value = lastPage;
+      await walkRange(owner, repo, token, lastEventId, revealedFrom, revealedDownTo, ceiling, seen, collected);
+    }
+    if (!collectNew(events, lastEventId, seen, collected))
+    {
+      return;
+    }
+  }
+}
+
 // Repo-wide, incremental walk of /issues/events — a single bulk paginated
 // feed that covers both issues and PRs (every PR is an issue under the
 // hood), rather than one call per issue or a separate PR-only fetch.
@@ -81,25 +147,18 @@ export async function walkNewEvents(
   token: string,
   lastEventId: number,
 ): Promise<GithubIssueEvent[]> {
-  const first = await fetchEventsPage(owner, repo, 1, token);
-  const lastPage = first.lastPage ?? 1;
-
-  if (lastPage === 1)
-  {
-    return first.events.filter((event) => event.id > lastEventId);
-  }
-
+  const seen = new Set<number>();
   const collected: GithubIssueEvent[] = [];
-  for (let page = lastPage; page >= 1; page -= 1)
+
+  const first = await fetchEventsPage(owner, repo, 1, token);
+  const ceiling = { value: first.lastPage ?? 1 };
+  collectNew(first.events, lastEventId, seen, collected);
+
+  if (ceiling.value > 1)
   {
-    const { events } = await fetchEventsPage(owner, repo, page, token);
-    const newEvents = events.filter((event) => event.id > lastEventId);
-    collected.push(...newEvents);
-    if (newEvents.length === 0)
-    {
-      break;
-    }
+    await walkRange(owner, repo, token, lastEventId, ceiling.value, 2, ceiling, seen, collected);
   }
+
   return collected.sort((a, b) => a.id - b.id);
 }
 

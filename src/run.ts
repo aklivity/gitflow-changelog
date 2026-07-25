@@ -1,8 +1,11 @@
 import { join } from 'node:path';
 import { loadCache, saveCache } from './cache.js';
+import type { CompletenessIssue } from './completeness.js';
+import { checkCompleteness } from './completeness.js';
 import { resolveUpstreamConfig } from './discover-upstream.js';
 import { GithubDriver } from './drivers/github.js';
-import { cloneOrUpdateRepo } from './git.js';
+import type { GitOptions } from './git.js';
+import { cloneOrUpdateRepo, resolveCommit } from './git.js';
 import { expandTransitiveDependencySet, indexMavenModules, readDependencySet } from './maven.js';
 import { loadOverrides } from './overrides.js';
 import { place } from './placement.js';
@@ -34,6 +37,14 @@ export interface RunOptions {
 export interface RunResult {
   markdown: string;
   warnings: string[];
+  // Non-empty means checkCompleteness found a PR that git history says
+  // merged in the range this run just rendered, but that never showed up
+  // anywhere in the driver's fetched entries — a distinct, more severe
+  // signal than `warnings` (see completeness.ts). Callers (action.ts,
+  // cli.ts) should still write out `markdown` — a partially-correct
+  // changelog is more useful than none — but must also fail the run loudly
+  // rather than let a silently-incomplete result look like success.
+  completenessIssues: CompletenessIssue[];
 }
 
 const RENDERERS: Record<string, typeof render> = {
@@ -176,6 +187,28 @@ async function computeUpstreamFoldIn(
   return { sections, warnings };
 }
 
+// Which tag bounds the range checkCompleteness should verify depends on
+// whether `ref` IS the newest reachable tag (this run just rendered that
+// tag's own section — e.g. the base-branch run after tagging) or is ahead
+// of every known tag (this run rendered an Unreleased/pre-tag section —
+// e.g. the release-branch run before tagging exists yet). Comparing by sha
+// rather than name/ancestry: `ref` can be a branch name, "HEAD", or a sha,
+// and the newest tag's own commit is the only unambiguous thing to compare
+// it against.
+async function determinePreviousTagName(
+  placement: Awaited<ReturnType<typeof place>>,
+  ref: string,
+  gitOptions: GitOptions,
+): Promise<string | undefined> {
+  const [newest, second] = placement.allTags;
+  if (!newest)
+  {
+    return undefined;
+  }
+  const refSha = await resolveCommit(ref, gitOptions);
+  return refSha === newest.sha ? second?.name : newest.name;
+}
+
 export async function run(options: RunOptions): Promise<RunResult> {
   const renderer = RENDERERS[options.format];
   if (!renderer)
@@ -224,6 +257,20 @@ export async function run(options: RunOptions): Promise<RunResult> {
   );
   placement.unresolved = unresolved;
 
+  const gitOptions: GitOptions = { cwd: options.gitDir };
+  const previousTagName = await determinePreviousTagName(placement, options.ref, gitOptions);
+  const knownNumbers = new Set<number>();
+  for (const entry of resolved)
+  {
+    knownNumbers.add(entry.number);
+  }
+  for (const { entry } of unresolved)
+  {
+    knownNumbers.add(entry.number);
+  }
+  const completenessRange = previousTagName ? `${previousTagName}..${options.ref}` : options.ref;
+  const completenessIssues = await checkCompleteness(completenessRange, knownNumbers, gitOptions);
+
   const foldIns: FoldInsByBucket = new Map();
   for (const upstreamConfig of options.upstream)
   {
@@ -248,5 +295,5 @@ export async function run(options: RunOptions): Promise<RunResult> {
   const renderPlacement = withFoldInOnlyBuckets(placement, foldIns);
   const markdown = renderer(renderPlacement, { owner: options.owner, repo: options.repo }, foldIns);
 
-  return { markdown, warnings };
+  return { markdown, warnings, completenessIssues };
 }

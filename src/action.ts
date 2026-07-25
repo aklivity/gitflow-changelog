@@ -23,15 +23,31 @@ async function main(): Promise<void> {
 
   const outputPath = core.getInput('output-path') || 'CHANGELOG.md';
 
-  const { markdown, warnings } = await run(options);
+  const { markdown, warnings, completenessIssues } = await run(options);
 
   for (const warning of warnings)
   {
     core.warning(warning);
   }
 
+  // Written regardless of completenessIssues below — a partially-correct
+  // changelog (missing only the entries flagged) is still more useful than
+  // none, and the step failing loudly is what makes sure the gap actually
+  // gets noticed and fixed, rather than silently shipping either way.
   await writeFile(outputPath, markdown, 'utf8');
   core.setOutput('changelog-path', outputPath);
+
+  if (completenessIssues.length > 0)
+  {
+    const details = completenessIssues.map((issue) => `#${issue.number} (${issue.sha})`).join(', ');
+    core.setFailed(
+      `changelog completeness check failed: git history shows ${completenessIssues.length} merged PR(s) in this ` +
+        `release that never appeared in the fetched entries — ${details}. CHANGELOG.md was still written with ` +
+        'whatever entries were found, but it is missing these. This means the driver\'s own PR discovery (the ' +
+        '/issues/events walk) silently dropped them — investigate before trusting this changelog, and add an ' +
+        'explicit entry once the cause is understood. See completeness.ts for why this check exists.',
+    );
+  }
 }
 
 main().catch((error: unknown) => {
