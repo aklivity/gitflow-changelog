@@ -159,5 +159,5 @@ outputs:
     description: Path to the generated merge report.
 
 runs:
-  using: node20
+  using: node24
   main: index.js
